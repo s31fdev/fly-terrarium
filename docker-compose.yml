@@ -1,0 +1,8 @@
+services:
+  sim:
+    build: .
+    image: drosofila-sim
+    # The whole project is mounted, so editing route.yaml or run_route.py
+    # does not require a rebuild. Results appear in ./output on the host.
+    volumes:
+      - .:/app
