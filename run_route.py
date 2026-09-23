@@ -183,17 +183,22 @@ def main():
 
     # Per-step summary: how far the fly went and how much it turned.
     # Positive heading change = counter-clockwise seen from above = turn left.
-    heading_unwrapped = np.degrees(np.unwrap(np.radians(data[:, 3])))
+    # The heading wobbles with every stride, so each step's final heading is
+    # averaged over its last 0.1 s (about one stride).
+    heading = np.degrees(np.unwrap(np.radians(data[:, 3])))
+    window = int(round(0.1 / SAMPLE_PERIOD_S))
+    prev_heading, prev_pos = heading[0], data[0, 1:3]
     log.info("Step summary:")
     for k, step in enumerate(route):
         idx = np.flatnonzero(data[:, 4] == k)
-        idx = np.append(idx, min(idx[-1] + 1, len(data) - 1))  # include the step's end
-        dist = np.hypot(*(data[idx[-1], 1:3] - data[idx[0], 1:3]))
-        turn = heading_unwrapped[idx[-1]] - heading_unwrapped[idx[0]]
-        direction = "left" if turn > 0 else "right"
+        end_heading, end_pos = heading[idx[-window:]].mean(), data[idx[-1], 1:3]
+        turn = end_heading - prev_heading
+        dist = np.hypot(*(end_pos - prev_pos))
+        prev_heading, prev_pos = end_heading, end_pos
         log.info(
             f"  {k + 1}. {step['action']:<7} strength={step['strength']:.1f}  "
-            f"moved {dist:5.2f} mm  turned {turn:+7.1f} deg ({direction})"
+            f"moved {dist:5.2f} mm  turned {turn:+7.1f} deg "
+            f"({'left' if turn > 0 else 'right'})"
         )
 
     fig, ax = plt.subplots(figsize=(7, 7))
