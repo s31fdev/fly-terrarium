@@ -7,7 +7,10 @@ Runs natively on Windows (the window is drawn by the GPU), not in Docker.
                               (press again for a sharper turn)
     uv run run_live.py odor   the fly follows a smell (green disc) on its own;
                               arrow keys move the smell, relative to the view:
-                              Up = away from you, Left = to the left, etc.
+                              Up = away from you, Left = to the left, etc.;
+                              or hold Ctrl and drag it with the right mouse button
+                              (if you double-clicked something else, double-click
+                              the disc first to select it again).
 
 Mouse:  left drag = rotate view, right drag = move view, wheel = zoom,
         double-click the fly, then Ctrl + right drag = push it.
@@ -84,6 +87,23 @@ def move_odor(key, source, azimuth_deg):
     source[:2] += ODOR_STEP * shift
 
 
+def keep_drag_on_floor(viewer, floor_z):
+    """Make mouse dragging slide the smell over the floor.
+
+    MuJoCo's Ctrl + right drag moves the selected object in a vertical plane
+    facing the camera, so dragging up would lift the disc into the air. Turn
+    that lift into "away from the camera" instead (like the Up arrow).
+    """
+    with viewer.lock():
+        ref = viewer.perturb.refpos  # where the viewer puts the dragged object
+        lift = ref[2] - floor_z
+        az = np.radians(viewer.cam.azimuth)
+        ref[0] += lift * np.cos(az)
+        ref[1] += lift * np.sin(az)
+        ref[2] = floor_z
+        viewer.perturb.refquat[:] = (1, 0, 0, 0)  # Ctrl + left drag would tilt the disc
+
+
 def main():
     print(__doc__)
     world = FlatGroundWorld()
@@ -98,7 +118,9 @@ def main():
         left_idx = order.index(BodySegment("l_funiculus"))
         right_idx = order.index(BodySegment("r_funiculus"))
         # Writing into this row of mocap_pos moves the green disc.
-        source = sim.mj_data.mocap_pos[sim.mj_model.body("odor_source").mocapid[0]]
+        odor_body = sim.mj_model.body("odor_source")
+        source = sim.mj_data.mocap_pos[odor_body.mocapid[0]]
+        floor_z = source[2]
 
     with mujoco.viewer.launch_passive(
         sim.mj_model, sim.mj_data, key_callback=on_key, show_left_ui=False, show_right_ui=False
@@ -109,6 +131,10 @@ def main():
         viewer.cam.trackbodyid = thorax_id
         viewer.cam.azimuth = 0
         viewer.cam.distance, viewer.cam.elevation = (40, -60) if odor_mode else (10, -40)
+        if odor_mode:
+            # Select the smell up front, so Ctrl + right drag moves it right away.
+            with viewer.lock():
+                viewer.perturb.select = odor_body.id
 
         i = 0
         wall_ref, sim_ref = time.perf_counter(), sim.mj_data.time
@@ -117,6 +143,8 @@ def main():
             if odor_mode:
                 while odor_moves:
                     move_odor(odor_moves.pop(0), source, viewer.cam.azimuth)
+                if viewer.perturb.select == odor_body.id and viewer.perturb.active:
+                    keep_drag_on_floor(viewer, floor_z)
                 # The brain from run_odor.py decides from the two antennae alone.
                 pos = sim.get_body_positions(fly.name)
                 smell_left = odor_intensity(pos[left_idx], source[:2])
@@ -164,7 +192,10 @@ def main():
                     ("Brain", f"{action} {strength:.1f}"),
                     ("Distance", f"{distance:.1f} mm"),
                 ]
-                help_rows = [("Arrows", "move the smell (green disc)")]
+                help_rows = [
+                    ("Arrows", "move the smell (green disc)"),
+                    ("Ctrl + right drag", "drag the smell with the mouse"),
+                ]
             else:
                 help_rows = [("Up", "walk"), ("Down", "stop"), ("Left / Right", "turn (again = sharper)")]
             status.append(("Speed", f"{speed:.2f}x real time"))
