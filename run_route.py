@@ -76,21 +76,13 @@ def descending_signal(action, strength):
     return np.array([1.0, inner])  # right
 
 
-def main():
-    route_file = sys.argv[1] if len(sys.argv) > 1 else "route.yaml"
-    OUTPUT_DIR.mkdir(exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(message)s",
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler(OUTPUT_DIR / "run.log", mode="w"),
-        ],
-    )
-    route = load_route(route_file)
-    step_ends = np.cumsum([step["duration_s"] for step in route])
-    log.info(f"Route {route_file}: {len(route)} steps, {step_ends[-1]:.1f} s")
+def make_simulation(timestep=None, control_every=1):
+    """Build the fly on flat ground and its walking controller.
 
+    Returns (fly, camera, sim, controller) with the fly already standing on the
+    ground. `timestep` is the physics step (None = FlyGym default, 0.1 ms);
+    the controller must be called once every `control_every` physics steps.
+    """
     # Fly with a camera that follows it and looks straight down.
     # "track" mode keeps the camera orientation fixed in the world frame,
     # so the video shows the fly turning, not the arena rotating.
@@ -110,18 +102,12 @@ def main():
         bodysegs_with_ground_contact=ContactBodiesPreset.TIBIA_TARSUS_ONLY,
         add_ground_contact_sensors=False,
     )
-    sim = Simulation(world)
-    sim.set_renderer(
-        camera,
-        camera_res=VIDEO_RES,
-        playback_speed=PLAYBACK_SPEED,
-        output_fps=VIDEO_FPS,
-    )
+    sim = Simulation(world, timestep=timestep)
 
     preprogrammed_steps = PreprogrammedSteps()
     dof_order = fly.get_actuated_jointdofs_order("position")
     controller = HybridTurningController(
-        timestep=sim.timestep,
+        timestep=sim.timestep * control_every,
         preprogrammed_steps=preprogrammed_steps,
         output_dof_order=dof_order,
     )
@@ -135,6 +121,31 @@ def main():
     )
     apply_locomotion_action(sim, fly.name, standing)
     sim.warmup()
+    return fly, camera, sim, controller
+
+
+def main():
+    route_file = sys.argv[1] if len(sys.argv) > 1 else "route.yaml"
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(OUTPUT_DIR / "run.log", mode="w"),
+        ],
+    )
+    route = load_route(route_file)
+    step_ends = np.cumsum([step["duration_s"] for step in route])
+    log.info(f"Route {route_file}: {len(route)} steps, {step_ends[-1]:.1f} s")
+
+    fly, camera, sim, controller = make_simulation()
+    sim.set_renderer(
+        camera,
+        camera_res=VIDEO_RES,
+        playback_speed=PLAYBACK_SPEED,
+        output_fps=VIDEO_FPS,
+    )
 
     thorax_idx = fly.get_bodysegs_order().index(BodySegment("c_thorax"))
     n_sim_steps = int(round(step_ends[-1] / sim.timestep))
