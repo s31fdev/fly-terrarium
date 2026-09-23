@@ -47,3 +47,4 @@ typing_extensions==4.16.0
 wadler_lindig==0.1.7
 wcwidth==0.9.1
 zipp==4.1.0
+win32-setctime==1.2.0 ; sys_platform == "win32"
