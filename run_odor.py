@@ -38,6 +38,24 @@ def odor_intensity(point, source):
     return 1.0 / (1.0 + np.sum((point[:2] - source) ** 2))
 
 
+def add_odor_source(world, source):
+    """Add a green disc marking the odor source; the fly can walk over it.
+
+    It is a mocap body, so its position can be changed while the simulation
+    runs (see run_live.py odor mode).
+    """
+    body = world.mjcf_root.worldbody.add_body(
+        name="odor_source", mocap=True, pos=[source[0], source[1], 0.02]
+    )
+    body.add_geom(
+        type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+        size=[1.0, 0.02, 0],  # radius, half-height in mm
+        rgba=[0.2, 0.8, 0.2, 1],
+        contype=0,
+        conaffinity=0,
+    )
+
+
 def brain(left, right):
     """Decide what to do from the two antenna readings alone."""
     if (left + right) / 2 > ARRIVED_INTENSITY:
@@ -59,14 +77,7 @@ def main():
     # Arena: a green disc marks the odor source (the fly can walk over it), and
     # a camera looks straight down from high enough to see the start and the source.
     world = FlatGroundWorld()
-    world.mjcf_root.worldbody.add_geom(
-        type=mujoco.mjtGeom.mjGEOM_CYLINDER,
-        size=[1.0, 0.02, 0],  # radius, half-height in mm
-        pos=[source[0], source[1], 0.02],
-        rgba=[0.2, 0.8, 0.2, 1],
-        contype=0,
-        conaffinity=0,
-    )
+    add_odor_source(world, source)
     half_fov = np.tan(np.radians(45 / 2))  # vertical; horizontal is 4/3 of it
     height = max((abs(source[1]) / 2 + 5) / half_fov, (abs(source[0]) / 2 + 5) / (half_fov * 4 / 3))
     camera = world.mjcf_root.worldbody.add_camera(
