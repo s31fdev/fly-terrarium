@@ -1,0 +1,14 @@
+# Route for the fly. Steps run top to bottom.
+#   action:     forward | left | right | stop
+#   duration_s: how long the step lasts, in simulated seconds
+#   strength:   0..1
+#                 forward     -> walking speed (1.0 = normal gait)
+#                 left, right -> how sharp the turn is
+#                                (0 = straight, 0.5 = inner legs stop,
+#                                 1.0 = inner legs step backwards, turn almost in place)
+#                 stop        -> ignored (can be omitted)
+- {action: forward, duration_s: 3.5, strength: 1.0}
+- {action: left,    duration_s: 3.0, strength: 0.1}   # smooth left turn
+- {action: forward, duration_s: 2.5, strength: 1.0}
+- {action: right,   duration_s: 0.3, strength: 0.7}   # sharp right turn
+- {action: stop,    duration_s: 2.0}
