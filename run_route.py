@@ -76,12 +76,13 @@ def descending_signal(action, strength):
     return np.array([1.0, inner])  # right
 
 
-def make_simulation(timestep=None, control_every=1):
+def make_simulation(timestep=None, control_every=1, world=None):
     """Build the fly on flat ground and its walking controller.
 
     Returns (fly, camera, sim, controller) with the fly already standing on the
     ground. `timestep` is the physics step (None = FlyGym default, 0.1 ms);
     the controller must be called once every `control_every` physics steps.
+    `world` lets the caller pass a FlatGroundWorld with extra objects in it.
     """
     # Fly with a camera that follows it and looks straight down.
     # "track" mode keeps the camera orientation fixed in the world frame,
@@ -94,7 +95,8 @@ def make_simulation(timestep=None, control_every=1):
         rotation=Rotation3D("xyaxes", (1, 0, 0, 0, 1, 0)),  # image right = +x, up = +y
         fovy=40,
     )
-    world = FlatGroundWorld()
+    if world is None:
+        world = FlatGroundWorld()
     world.add_fly(
         fly,
         [0, 0, 0.8],
