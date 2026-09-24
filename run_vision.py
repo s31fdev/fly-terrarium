@@ -115,6 +115,21 @@ def fly_view(readouts, step=2):
     return (np.concatenate(eyes, axis=1) * 255).astype(np.uint8)
 
 
+def write_video(path, arena_frames, *panels):
+    """Video: the arena on top, below it each panel (gray or RGB images, one per
+    frame), centred. The first panel is what the fly sees (left eye | right eye)."""
+    frames = []
+    for arena, *views in zip(arena_frames, *panels):
+        rows = [arena]
+        for view in views:
+            if view.ndim == 2:
+                view = np.repeat(view[:, :, None], 3, axis=2)  # gray -> RGB
+            pad = (arena.shape[1] - view.shape[1]) // 2
+            rows.append(np.pad(view, ((0, 0), (pad, arena.shape[1] - view.shape[1] - pad), (0, 0))))
+        frames.append(np.concatenate(rows, axis=0))
+    iio.imwrite(path, frames, fps=VIDEO_FPS, codec="libx264", quality=8)
+
+
 def main():
     pillar = np.array([float(v) for v in sys.argv[1:3]] if len(sys.argv) > 2 else DEFAULT_PILLAR)
     OUTPUT_DIR.mkdir(exist_ok=True)
@@ -178,14 +193,8 @@ def main():
     else:
         log.info(f"Reached the pillar at t={arrived_at:.1f} s; now {final_distance:.1f} mm from its centre")
 
-    # Video: the arena on top, what the fly sees (left eye | right eye) below.
-    frames = []
-    for arena, view in zip(sim.renderer.frames[camera.name], views):
-        eyes = np.repeat(view[:, :, None], 3, axis=2)  # 256 x 450, gray -> RGB
-        pad = (arena.shape[1] - eyes.shape[1]) // 2
-        eyes = np.pad(eyes, ((0, 0), (pad, arena.shape[1] - eyes.shape[1] - pad), (0, 0)))
-        frames.append(np.concatenate([arena, eyes], axis=0))
-    iio.imwrite(OUTPUT_DIR / "vision.mp4", frames, fps=VIDEO_FPS, codec="libx264", quality=8)
+    write_video(OUTPUT_DIR / "vision.mp4", sim.renderer.frames[camera.name], views)
+    sim.close()  # release the OpenGL renderers now, not in whatever order Python exits
 
     # Top view: the fly's path, start and pillar.
     path = np.array(path)
