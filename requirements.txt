@@ -48,3 +48,5 @@ wadler_lindig==0.1.7
 wcwidth==0.9.1
 zipp==4.1.0
 win32-setctime==1.2.0 ; sys_platform == "win32"
+# brain.py: reads the connectome (parquet) once, when converting it
+pyarrow==25.0.1
