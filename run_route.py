@@ -14,7 +14,7 @@ from pathlib import Path
 
 import matplotlib
 
-matplotlib.use("Agg")  # no display in the container
+matplotlib.use("Agg")  # plots go to files, no window needed
 import matplotlib.pyplot as plt
 import numpy as np
 import yaml

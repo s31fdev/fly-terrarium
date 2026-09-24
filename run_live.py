@@ -1,7 +1,5 @@
 """Live fly in a MuJoCo window.
 
-Runs natively on Windows (the window is drawn by the GPU), not in Docker.
-
     uv run run_live.py          you steer the fly with the arrow keys:
                                 Up = walk, Down = stop, Left / Right = turn
                                 (press again for a sharper turn)
@@ -39,7 +37,7 @@ from run_vision import VISION_HZ, add_pillar, brain, darkness_above_horizon, fly
 from run_escape import BrainView, EscapeBrain
 
 # Speed settings. run_route.py uses 0.1 ms physics steps and runs the
-# controller every step (10 kHz), ~16x slower than real time. These values
+# controller every step (10 kHz), ~12x slower than real time. These values
 # give ~0.93x real time on an i7-9700F (walking) with nearly the same gait (see README).
 # On a slower CPU the fly moves in slow motion.
 PHYSICS_TIMESTEP = 2.5e-4  # s; 5e-4 is already unstable (the fly bounces)

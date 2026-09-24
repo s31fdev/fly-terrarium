@@ -1,5 +1,5 @@
-# Exact lock: output of "pip freeze" after "pip install flygym==2.1.0"
-# on python:3.12-slim-trixie. dm_control is not needed by FlyGym 2.x.
+# Exact lock: output of "pip freeze" after "pip install flygym==2.1.0" on
+# Python 3.12. dm_control is not needed by FlyGym 2.x.
 absl-py==2.5.0
 asttokens==3.0.2
 contourpy==1.4.0
