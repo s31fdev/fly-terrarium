@@ -2,15 +2,15 @@
 
 Runs natively on Windows (the window is drawn by the GPU), not in Docker.
 
-    uv run run_live.py        you steer the fly with the arrow keys:
-                              Up = walk, Down = stop, Left / Right = turn
-                              (press again for a sharper turn)
-    uv run run_live.py odor   the fly follows a smell (green disc) on its own;
-                              arrow keys move the smell, relative to the view:
-                              Up = away from you, Left = to the left, etc.;
-                              or hold Ctrl and drag it with the right mouse button
-                              (if you double-clicked something else, double-click
-                              the disc first to select it again).
+    uv run run_live.py          you steer the fly with the arrow keys:
+                                Up = walk, Down = stop, Left / Right = turn
+                                (press again for a sharper turn)
+    uv run run_live.py vision   the fly walks to a dark pillar it sees with its
+                                eyes (its view is shown bottom right). Move the
+                                pillar with the arrow keys, relative to the view
+                                (Up = away from you), or hold Ctrl and drag it
+                                with the right mouse button (if you double-clicked
+                                something else, double-click the pillar first).
 
 Mouse:  left drag = rotate view, right drag = move view, wheel = zoom,
         double-click the fly, then Ctrl + right drag = push it.
@@ -25,12 +25,11 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 import flygym_demo.complex_terrain.hybrid_controller as hybrid_controller
-from flygym.anatomy import BodySegment
 from flygym.compose import FlatGroundWorld
 from flygym_demo.complex_terrain import HybridControllerObservation, apply_locomotion_action
 
-from run_odor import add_odor_source, brain, odor_intensity
-from run_route import descending_signal, make_simulation
+from run_route import descending_signal, make_simulation, stand_up
+from run_vision import VISION_HZ, add_pillar, brain, darkness_above_horizon, fly_view
 
 # Speed settings. run_route.py uses 0.1 ms physics steps and runs the
 # controller every step (10 kHz), ~16x slower than real time. These values
@@ -41,8 +40,8 @@ CONTROL_EVERY = 8  # controller update every 8 physics steps = 500 Hz
 FRAME_TIME = 1 / 60  # simulated seconds between screen updates
 NOSLIP_ITERATIONS = 2  # FlyGym default is 5; 2 gives the same gait ~8% faster
 
-ODOR_START = (15.0, 10.0)  # mm, ahead and to the left of the fly
-ODOR_STEP = 3.0  # mm the smell moves per arrow key press
+PILLAR_START = (15.0, 10.0)  # mm, ahead and to the left of the fly
+PILLAR_STEP = 3.0  # mm the pillar moves per arrow key press
 
 # The controller rebuilds 42 joint descriptors on every call. Caching them gives
 # identical results about 15% faster.
@@ -52,13 +51,16 @@ hybrid_controller.dof_spec_to_jointdof = functools.lru_cache(maxsize=None)(
 
 KEY_RIGHT, KEY_LEFT, KEY_DOWN, KEY_UP = 262, 263, 264, 265  # GLFW key codes
 ARROWS = {KEY_UP: "forward", KEY_DOWN: "stop", KEY_LEFT: "left", KEY_RIGHT: "right"}
+ROTATE = int(mujoco.mjtPertBit.mjPERT_ROTATE)
+# MuJoCo warnings raised when the physics blows up (bad position, velocity, acceleration)
+BLOW_UPS = [int(w) for w in (mujoco.mjtWarning.mjWARN_BADQPOS, mujoco.mjtWarning.mjWARN_BADQVEL, mujoco.mjtWarning.mjWARN_BADQACC)]
 
-odor_mode = sys.argv[1:] == ["odor"]
+vision_mode = sys.argv[1:] == ["vision"]
 # Steering mode: current (action, strength). Replaced as a whole tuple, so the
 # viewer thread (keyboard) and the main loop never see a half-updated command.
 command = ("stop", 0.0)
-# Odor mode: arrow presses waiting to move the smell (list.append is thread-safe).
-odor_moves = []
+# Vision mode: arrow presses waiting to move the pillar (list.append is thread-safe).
+pillar_moves = []
 
 
 def on_key(key):
@@ -67,8 +69,8 @@ def on_key(key):
     action = ARROWS.get(key)
     if action is None:
         return
-    if odor_mode:
-        odor_moves.append(key)
+    if vision_mode:
+        pillar_moves.append(key)
         return
     if action in ("left", "right"):
         # First press: smooth turn. Same arrow again: sharper, up to 1.0.
@@ -78,79 +80,82 @@ def on_key(key):
     command = (action, strength)
 
 
-def move_odor(key, source, azimuth_deg):
-    """Shift the smell by one arrow press, relative to where the camera looks."""
+def move_pillar(key, pillar, azimuth_deg):
+    """Shift the pillar by one arrow press, relative to where the camera looks."""
     az = np.radians(azimuth_deg)
     away = np.array([np.cos(az), np.sin(az)])  # camera view direction on the ground
     left = np.array([-away[1], away[0]])
     shift = {KEY_UP: away, KEY_DOWN: -away, KEY_LEFT: left, KEY_RIGHT: -left}[key]
-    source[:2] += ODOR_STEP * shift
+    pillar[:2] += PILLAR_STEP * shift
 
 
-def keep_drag_on_floor(viewer, floor_z):
-    """Make mouse dragging slide the smell over the floor.
+def keep_drag_level(viewer, rest_z):
+    """Make mouse dragging slide the pillar over the floor.
 
     MuJoCo's Ctrl + right drag moves the selected object in a vertical plane
-    facing the camera, so dragging up would lift the disc into the air. Turn
+    facing the camera, so dragging up would lift the pillar into the air. Turn
     that lift into "away from the camera" instead (like the Up arrow).
     """
     with viewer.lock():
         ref = viewer.perturb.refpos  # where the viewer puts the dragged object
-        lift = ref[2] - floor_z
+        lift = ref[2] - rest_z
         az = np.radians(viewer.cam.azimuth)
         ref[0] += lift * np.cos(az)
         ref[1] += lift * np.sin(az)
-        ref[2] = floor_z
-        viewer.perturb.refquat[:] = (1, 0, 0, 0)  # Ctrl + left drag would tilt the disc
+        ref[2] = rest_z
 
 
 def main():
     print(__doc__)
     world = FlatGroundWorld()
-    if odor_mode:
-        add_odor_source(world, ODOR_START)
-    fly, _, sim, controller = make_simulation(PHYSICS_TIMESTEP, CONTROL_EVERY, world)
+    if vision_mode:
+        add_pillar(world, PILLAR_START)
+    fly, _, sim, controller = make_simulation(PHYSICS_TIMESTEP, CONTROL_EVERY, world, vision=vision_mode)
     sim.mj_model.opt.noslip_iterations = NOSLIP_ITERATIONS
     thorax_id = mujoco.mj_name2id(sim.mj_model, mujoco.mjtObj.mjOBJ_BODY, f"{fly.name}/c_thorax")
     steps_per_frame = round(FRAME_TIME / sim.timestep)
-    if odor_mode:
-        order = fly.get_bodysegs_order()
-        left_idx = order.index(BodySegment("l_funiculus"))
-        right_idx = order.index(BodySegment("r_funiculus"))
-        # Writing into this row of mocap_pos moves the green disc.
-        odor_body = sim.mj_model.body("odor_source")
-        source = sim.mj_data.mocap_pos[odor_body.mocapid[0]]
-        floor_z = source[2]
+    if vision_mode:
+        # Writing into this row of mocap_pos moves the pillar.
+        pillar_body = sim.mj_model.body("pillar")
+        pillar = sim.mj_data.mocap_pos[pillar_body.mocapid[0]]
+        rest_z = pillar[2]
+        vision_every = round(1 / (VISION_HZ * FRAME_TIME))  # in frames
+        sim.get_ommatidia_readouts(fly.name)  # first call compiles the retina code (~7 s)
 
     with mujoco.viewer.launch_passive(
         sim.mj_model, sim.mj_data, key_callback=on_key, show_left_ui=False, show_right_ui=False
     ) as viewer:
         # Camera follows the fly from behind and above; the mouse can still move it.
-        # In odor mode it is farther away so the smell is in view too.
+        # In vision mode it is farther away so the pillar is in view too.
         viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
         viewer.cam.trackbodyid = thorax_id
         viewer.cam.azimuth = 0
-        viewer.cam.distance, viewer.cam.elevation = (40, -60) if odor_mode else (10, -40)
-        if odor_mode:
-            # Select the smell up front, so Ctrl + right drag moves it right away.
+        viewer.cam.distance, viewer.cam.elevation = (40, -45) if vision_mode else (10, -40)
+        if vision_mode:
+            # Select the pillar up front, so Ctrl + right drag moves it right away.
             with viewer.lock():
-                viewer.perturb.select = odor_body.id
+                viewer.perturb.select = pillar_body.id
 
-        i = 0
+        i, frame, blowups = 0, 0, 0
         wall_ref, sim_ref = time.perf_counter(), sim.mj_data.time
         speed, speed_wall, speed_sim = 1.0, wall_ref, sim_ref
         while viewer.is_running():
-            if odor_mode:
-                while odor_moves:
-                    move_odor(odor_moves.pop(0), source, viewer.cam.azimuth)
-                if viewer.perturb.select == odor_body.id and viewer.perturb.active:
-                    keep_drag_on_floor(viewer, floor_z)
-                # The brain from run_odor.py decides from the two antennae alone.
-                pos = sim.get_body_positions(fly.name)
-                smell_left = odor_intensity(pos[left_idx], source[:2])
-                smell_right = odor_intensity(pos[right_idx], source[:2])
-                action, strength = brain(smell_left, smell_right)
-                distance = np.linalg.norm((pos[left_idx] + pos[right_idx])[:2] / 2 - source[:2])
+            if vision_mode:
+                while pillar_moves:
+                    move_pillar(pillar_moves.pop(0), pillar, viewer.cam.azimuth)
+                if viewer.perturb.select == pillar_body.id and viewer.perturb.active:
+                    keep_drag_level(viewer, rest_z)
+                if frame % vision_every == 0:
+                    # The brain from run_vision.py decides from what the eyes see.
+                    readouts = sim.get_ommatidia_readouts(fly.name)
+                    darkness = darkness_above_horizon(readouts)
+                    action, strength = brain(darkness)
+                    eyes = fly_view(readouts)  # left | right eye, 256 x 450
+                    screen = viewer.viewport
+                    if screen is not None and screen.width > eyes.shape[1] + 20:
+                        corner = mujoco.MjrRect(screen.width - eyes.shape[1] - 10, 10, eyes.shape[1], eyes.shape[0])
+                        viewer.set_images((corner, np.repeat(eyes[:, :, None], 3, axis=2)))
+                distance = np.linalg.norm(sim.mj_data.xpos[thorax_id][:2] - pillar[:2])
             else:
                 action, strength = command
 
@@ -161,7 +166,22 @@ def main():
                     apply_locomotion_action(sim, fly.name, controller.step(signal, obs))
                 sim.step()
                 i += 1
+
+            # Twisting a body with the mouse (Ctrl + left drag) makes the physics
+            # of this tiny model blow up, so rotation drags are ignored.
+            if viewer.perturb.active & ROTATE:
+                with viewer.lock():
+                    viewer.perturb.active &= ~ROTATE
             viewer.sync()
+
+            # If the physics blew up anyway, MuJoCo resets it to a default pose.
+            # Put the fly back on its feet instead.
+            if sum(sim.mj_data.warning[w].number for w in BLOW_UPS) > blowups:
+                print("The physics became unstable; the fly stands up again.", flush=True)
+                stand_up(fly, sim, controller)
+                blowups = sum(sim.mj_data.warning[w].number for w in BLOW_UPS)
+                wall_ref, sim_ref = time.perf_counter(), sim.mj_data.time
+                speed_wall, speed_sim = wall_ref, sim_ref
 
             # Keep simulated time in step with the wall clock: wait when ahead.
             # When behind, do not try to catch up later (it would look like
@@ -178,23 +198,23 @@ def main():
                 speed = (sim.mj_data.time - speed_sim) / (now - speed_wall)
                 speed_wall, speed_sim = now, sim.mj_data.time
                 heading = np.degrees(np.arctan2(obs.fly_heading[1], obs.fly_heading[0]))
-                smell_info = f"distance to smell={distance:5.1f} mm  " if odor_mode else ""
+                pillar_info = f"distance to pillar={distance:5.1f} mm  " if vision_mode else ""
                 print(
                     f"t={sim.mj_data.time:6.1f} s  {action:<7} strength={strength:.1f}  "
-                    f"heading={heading:+6.1f} deg  {smell_info}speed={speed:.2f}x real time",
+                    f"heading={heading:+6.1f} deg  {pillar_info}speed={speed:.2f}x real time",
                     flush=True,
                 )
 
             status = [("Command", f"{action} {strength:.1f}")]
-            if odor_mode:
+            if vision_mode:
                 status = [
-                    ("Smell L / R", f"{smell_left:.4f} / {smell_right:.4f}"),
+                    ("Eyes see L / R", f"{darkness[0].sum():.1f} / {darkness[1].sum():.1f}"),
                     ("Brain", f"{action} {strength:.1f}"),
                     ("Distance", f"{distance:.1f} mm"),
                 ]
                 help_rows = [
-                    ("Arrows", "move the smell (green disc)"),
-                    ("Ctrl + right drag", "drag the smell with the mouse"),
+                    ("Arrows", "move the pillar"),
+                    ("Ctrl + right drag", "drag the pillar with the mouse"),
                 ]
             else:
                 help_rows = [("Up", "walk"), ("Down", "stop"), ("Left / Right", "turn (again = sharper)")]
@@ -205,6 +225,7 @@ def main():
                 (None, mujoco.mjtGridPos.mjGRID_BOTTOMLEFT,
                  "\n".join(r[0] for r in help_rows), "\n".join(r[1] for r in help_rows)),
             ])
+            frame += 1
 
 
 if __name__ == "__main__":

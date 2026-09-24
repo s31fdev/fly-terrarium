@@ -76,18 +76,21 @@ def descending_signal(action, strength):
     return np.array([1.0, inner])  # right
 
 
-def make_simulation(timestep=None, control_every=1, world=None):
+def make_simulation(timestep=None, control_every=1, world=None, vision=False):
     """Build the fly on flat ground and its walking controller.
 
     Returns (fly, camera, sim, controller) with the fly already standing on the
     ground. `timestep` is the physics step (None = FlyGym default, 0.1 ms);
     the controller must be called once every `control_every` physics steps.
-    `world` lets the caller pass a FlatGroundWorld with extra objects in it.
+    `world` lets the caller pass a FlatGroundWorld with extra objects in it;
+    `vision=True` gives the fly its compound eyes.
     """
     # Fly with a camera that follows it and looks straight down.
     # "track" mode keeps the camera orientation fixed in the world frame,
     # so the video shows the fly turning, not the arena rotating.
     fly = make_locomotion_fly(name="fly", colorize=True)
+    if vision:
+        fly.add_vision()
     camera = fly.add_tracking_camera(
         name="top_cam",
         mode="track",
@@ -106,24 +109,27 @@ def make_simulation(timestep=None, control_every=1, world=None):
     )
     sim = Simulation(world, timestep=timestep)
 
-    preprogrammed_steps = PreprogrammedSteps()
-    dof_order = fly.get_actuated_jointdofs_order("position")
     controller = HybridTurningController(
         timestep=sim.timestep * control_every,
-        preprogrammed_steps=preprogrammed_steps,
-        output_dof_order=dof_order,
+        preprogrammed_steps=PreprogrammedSteps(),
+        output_dof_order=fly.get_actuated_jointdofs_order("position"),
     )
+    stand_up(fly, sim, controller)
+    return fly, camera, sim, controller
 
-    # Start from the standing pose and let the fly settle on the ground.
+
+def stand_up(fly, sim, controller):
+    """Reset the fly to the standing pose and let it settle on the ground."""
     sim.reset()
     controller.reset(seed=0)
     standing = LocomotionAction(
-        joint_angles=preprogrammed_steps.default_pose_by_dof_order(dof_order),
+        joint_angles=controller.preprogrammed_steps.default_pose_by_dof_order(
+            controller.output_dof_order
+        ),
         adhesion_onoff=np.ones(6, dtype=bool),
     )
     apply_locomotion_action(sim, fly.name, standing)
     sim.warmup()
-    return fly, camera, sim, controller
 
 
 def main():
