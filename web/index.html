@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fly Terrarium</title>
+<meta name="description" content="A fly in a Petri dish, driven by a model of its whole nervous system built from the connectome (FlyWire or the male CNS).">
+<style>
+  :root {
+    --bg: #f4f1ea; --panel: #fffdf8; --ink: #1f1d1a; --muted: #6d665c; --line: #ddd5c7;
+    --accent: #b5462f; --dish: #fbfaf6; --dish-rim: #cfc7b8; --map-bg: #13151a;
+    --sugar: #e0a526; --bitter: #8f5bd6; --antenna: #2a9d8f; --loom: #3a78d8; --readout: #e04545;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #15161a; --panel: #1d1f24; --ink: #ece8e1; --muted: #9a948a; --line: #34363d;
+      --accent: #e0775f; --dish: #e9e5dc; --dish-rim: #8d877c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #15161a; --panel: #1d1f24; --ink: #ece8e1; --muted: #9a948a; --line: #34363d;
+    --accent: #e0775f; --dish: #e9e5dc; --dish-rim: #8d877c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1060px; margin: 0 auto; padding: 20px 16px 40px; }
+  h1 { font-size: 22px; margin: 0 0 2px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
+  @media (max-width: 860px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+  .tools { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .tools button, .tools label {
+    font: inherit; font-size: 14px; border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+    border-radius: 999px; padding: 6px 12px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center;
+  }
+  .tools button[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .tools .spacer { flex: 1; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  #arena { width: 100%; aspect-ratio: 1; display: block; cursor: crosshair; touch-action: manipulation; }
+  .status { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; font-size: 13px; color: var(--muted); }
+  #doing { color: var(--ink); font-weight: 600; }
+  #map { width: 100%; display: block; border-radius: 8px; background: var(--map-bg); cursor: grab; touch-action: none; }
+  #map:active { cursor: grabbing; }
+  .hint { font-size: 12px; color: var(--muted); margin: 4px 0 0; }
+  .meters { display: grid; grid-template-columns: auto 1fr 52px; gap: 6px 8px; align-items: center; margin-top: 10px; font-size: 13px; }
+  .meters .bar { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+  .meters .bar i { display: block; height: 100%; width: 0; background: var(--readout); transition: width 80ms linear; }
+  .meters .hz { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .meters .what { color: var(--muted); font-size: 12px; grid-column: 1 / -1; margin-top: -4px; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
+  details { margin-top: 16px; }
+  details p, details li { color: var(--muted); font-size: 14px; }
+  summary { cursor: pointer; font-weight: 600; }
+  .calm { font-size: 13px; color: var(--ink); background: var(--bg); border: 1px solid var(--accent); border-radius: 8px; padding: 8px 10px; margin: 10px 0 0; }
+  .calm button { font: inherit; margin-top: 6px; border: 1px solid var(--accent); background: var(--panel); color: var(--ink); border-radius: 999px; padding: 4px 12px; cursor: pointer; display: block; }
+  .calm[hidden] { display: none; }
+  footer { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 12px; }
+  footer p { font-size: 12px; color: var(--muted); margin: 0; }
+  a { color: inherit; }
+  #loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 14px; pointer-events: none; }
+  .arena-wrap { position: relative; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Fly Terrarium</h1>
+  <p class="sub">A fly in a Petri dish. Its decisions come from a model of its whole nervous system, built from the connectome: a female from FlyWire (138,639 neurons, brain only) or a male from the MaleCNS (165,122 neurons, brain and nerve cord). Put something next to it and watch which neurons answer.</p>
+  <div class="layout">
+    <section class="card">
+      <div class="tools" role="toolbar" aria-label="Tools">
+        <button data-tool="sugar" aria-pressed="true"><span class="dot" style="background: var(--sugar)"></span>Sugar</button>
+        <button data-tool="bitter" aria-pressed="false"><span class="dot" style="background: var(--bitter)"></span>Bitter</button>
+        <button data-tool="puff" aria-pressed="false"><span class="dot" style="background: var(--antenna)"></span>Puff</button>
+        <button data-tool="shadow" aria-pressed="false"><span class="dot" style="background: var(--loom)"></span>Shadow from above</button>
+        <span class="spacer"></span>
+        <button id="clear">Clear all</button>
+        <label title="Control: the same neurons and synapses, but the connections lead to random neurons"><input type="checkbox" id="shuffled"> shuffle the wiring</label>
+      </div>
+      <div class="arena-wrap">
+        <canvas id="arena" aria-label="A Petri dish with a fly"></canvas>
+        <div id="loading">loading the brain…</div>
+      </div>
+      <div class="status"><span>The fly: <span id="doing">—</span></span><span id="speed"></span></div>
+    </section>
+    <aside class="card">
+      <div class="tools" role="group" aria-label="Whose brain">
+        <button data-brain="783" aria-pressed="true">Female · FlyWire</button>
+        <button data-brain="mcns" aria-pressed="false">Male · MaleCNS</button>
+      </div>
+      <h2 id="map-title">Brain</h2>
+      <canvas id="map" aria-label="3D map of the neurons: the ones that spike light up"></canvas>
+      <p class="hint">Drag to turn; double-click to go back.</p>
+      <p id="calm" class="calm" hidden>The brain is overexcited: activity is going round in circles and may never die out, because the model has no neuron fatigue. While it lasts, time in the dish is heavily slowed down. <button>Calm the brain</button></p>
+      <div class="meters" id="meters"></div>
+    </aside>
+  </div>
+  <details>
+    <summary>What is real here and what is made up</summary>
+    <p><b>Real.</b> The brain is the model of Shiu et al. (Nature, 2024): each neuron integrates charge and fires, each synapse excites or inhibits according to its neurotransmitter. It runs right in the browser and matches our Python version (<code>brain.py</code>, checked against the original in Brian2): correlation of firing rates 0.9996 on FlyWire and 0.9998 on the MaleCNS. Which output neurons answer a stimulus is decided by the wiring alone.</p>
+    <ul>
+      <li>Sugar and bitter reach the taste neurons of the proboscis; the output is the proboscis motor neuron MN9. Bitter suppresses the answer to sugar, as in the paper.</li>
+      <li>A puff bends the antennae: the mechanoreceptors of Johnston's organ (JO-CE, JO-F); the output is aDN1/aDN2, the command to clean the antennae. The closer to the fly you puff, the stronger: from 200 Hz right at the fly to zero at 14 mm.</li>
+      <li>The shadow drives the looming detectors LC4, LPLC2, LC16 of each eye. Outputs: the giant fibre DNp01 (escape), DNa01/DNa02 right minus left (turning), MDN (backing up).</li>
+    </ul>
+    <p><b>Female and male.</b> These are two different flies, scanned by different labs. They get the same stimuli but answer differently:</p>
+    <ul>
+      <li>FlyWire ends at the neck and has no jump motor neuron, so the female jumps by a made-up rule, "a giant fibre spike = a jump". The male has a nerve cord, and its jump is triggered by the motor neuron TTMn: the command goes from the eyes to the muscle through the wiring.</li>
+      <li>To make the female clean her antennae you have to puff almost right at her (from 150 Hz), and only her left antenna answers: that is how the wiring is, not a bug of the page. The male grooms even after a distant puff (from 50 Hz), with both antennae, but the right one also twitches the proboscis.</li>
+      <li>In the male, sugar extends the proboscis only through the left MN9; the right one stays silent.</li>
+      <li>The male brain is bistable: a puff right at the fly (200 Hz) starts a wave in about 5,600 neurons (Kenyon cells of the mushroom bodies, dopaminergic PAM neurons, the central complex). It goes round in circles until you calm it. In a living fly fatigue and inhibition, which the model lacks, would put it out. While it lasts, the browser computes the brain 10–25 times slower than real time.</li>
+      <li>A male synapse weighs 1.8 times less: on the same neurons the MaleCNS finds 1.8 times as many synapses as FlyWire, and the weight in the model was fitted to FlyWire.</li>
+    </ul>
+    <p><b>Made up.</b> The stroll while the brain is silent (the model has no spontaneous activity), the walls of the dish, the strength of the stimuli in hertz, the eye as a formula of how fast the shadow grows, turning spike rates into movements, the body animation. In the Python version of the project the fly has a real physical body and eyes of 721 facets.</p>
+    <p><b>Control.</b> "Shuffle the wiring" leaves each neuron its synapses but sends them to random neurons. If the fly still fed and escaped, the connectome would not be the reason.</p>
+  </details>
+  <footer>
+    <p><b>Data and model.</b>
+      Female connectome: <a href="https://flywire.ai">FlyWire</a> v783, Dorkenwald et al., <a href="https://doi.org/10.1038/s41586-024-07558-y">Nature 2024</a>; cell types: Schlegel et al., <a href="https://doi.org/10.1038/s41586-024-07686-5">Nature 2024</a>; license <a href="https://creativecommons.org/licenses/by-nc/4.0/">CC BY-NC 4.0</a>, non-commercial use only.
+      Male connectome: <a href="https://male-cns.janelia.org/">MaleCNS</a> v1.0, FlyEM / HHMI Janelia, University of Cambridge, MRC Laboratory of Molecular Biology, Google Research (Berg et al.); license <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.
+      Brain model: Shiu et al., <a href="https://doi.org/10.1038/s41586-024-07763-9">Nature 2024</a>.
+      The data here are modified: repacked and compressed, neuron coordinates rotated, male synapses weakened 1.8-fold.
+      Source code: <a href="https://github.com/s31fdev/fly-terrarium">github.com/s31fdev/fly-terrarium</a>.</p>
+  </footer>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>
