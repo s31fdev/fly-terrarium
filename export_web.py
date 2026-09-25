@@ -6,8 +6,8 @@ Writes web/data/<version>/ for FlyWire ("783") and the male CNS ("mcns"):
                            signed synapse counts (int16), both split into byte planes
                            (FlyWire compresses to 30 MB instead of 50)
     map.bin                every neuron's cell body for the 3D brain map: x, y, z (int16, 0.1 µm,
-                           -32768 = no position), rotated so that x points to the fly's right and
-                           y down the screen in the starting view, z into the screen
+                           -32768 = no position), rotated (never mirrored) so that x points to the
+                           fly's right and y is ventral, the same for both flies
     meta.json              sizes, parts, synapse weight, and the neuron groups the sandbox
                            stimulates / reads
     reference.json         spike rates of brain.py for web/check.mjs
@@ -67,10 +67,9 @@ GROUPS = {
     ),
 }
 INPUTS = ("sugar", "bitter", "antenna", "loom")
-# Brain map, starting view: the axis that points down the screen. FlyWire is a brain, seen
-# from the front (y is ventral); the male CNS also has the nerve cord, which hides behind the
-# brain from the front, so it starts seen from above (z runs from head to tail).
-DOWN = {"783": 1, "mcns": 2}
+# Brain map: the view a fly starts in. FlyWire is a brain, seen from the front; the male CNS
+# also has the nerve cord, which hides behind the brain from the front, so it starts from above.
+START_VIEW = {"783": "front", "mcns": "top"}
 NO_POSITION = -32768
 
 
@@ -118,20 +117,30 @@ def export(version):
         parts.append(f"connectome.bin.gz.{len(parts)}")
         (out / parts[-1]).write_bytes(blob[k:k + PART_BYTES])
 
-    # Brain map: rotate (never mirror) into the starting view, the fly's left on the left
-    down = DOWN[version]
+    # Brain map: rotate (never mirror) so that x points to the fly's right and y is ventral (the
+    # data's own y, in both connectomes); z = x × y then runs along the body, forwards or backwards
     xyz = brain.xyz.astype(float)
     across = 1 if np.nanmean(xyz[brain.side == "right", 0]) > np.nanmean(xyz[brain.side == "left", 0]) else -1
-    ex, ey = across * np.eye(3)[0], np.eye(3)[down]
+    ex, ey = across * np.eye(3)[0], np.eye(3)[1]
     xyz = xyz @ np.array([ex, ey, np.cross(ex, ey)]).T
     xyz -= (np.nanmin(xyz, axis=0) + np.nanmax(xyz, axis=0)) / 2
     (out / "map.bin").write_bytes(np.where(np.isnan(xyz), NO_POSITION, np.round(xyz * 10)).astype(np.int16).tobytes())
+    # Which way is forwards: the antennal lobes' projection neurons (types like "DA1_lPN") sit in
+    # front of the mushroom bodies' Kenyon cells, in both connectomes.
+    # Views as [yaw, pitch] for the page: from the front (dorsal up), from above and from the side
+    # (both with the head up / to the right); the fly's left stays on the left in the first two.
+    types = brain.cell_type.astype(str)
+    projection = np.char.endswith(types, "_lPN") | np.char.endswith(types, "_adPN") | np.char.endswith(types, "_vPN")
+    kenyon = np.char.startswith(types, "KC")
+    assert projection.sum() > 100 and kenyon.sum() > 1000
+    forwards = float(np.sign(np.nanmean(xyz[projection, 2]) - np.nanmean(xyz[kenyon, 2])))
+    views = {"front": [0, 0], "top": [0, forwards * np.pi / 2], "side": [forwards * np.pi / 2, 0]}
 
     groups = {k: group(brain, spec) for k, spec in GROUPS[version].items()}
     w_synapse = W_SYNAPSE / (MCNS_SYNAPSES_PER_FLYWIRE_SYNAPSE if version == "mcns" else 1)
     meta = dict(
         version=version, n=brain.n, m=len(post), w_synapse=w_synapse, parts=parts, size_mb=round(len(blob) / 1e6),
-        inputs=list(INPUTS), outputs=[k for k in groups if k not in INPUTS], groups=groups,
+        views=views, start_view=START_VIEW[version], inputs=list(INPUTS), outputs=[k for k in groups if k not in INPUTS], groups=groups,
     )
     (out / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
 

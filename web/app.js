@@ -1,8 +1,9 @@
-// The terrarium: the world, what the fly senses, what its spikes make it do, and drawing.
-// The brain itself runs in brain.js (a worker). The world advances in steps of CHUNK of
-// brain time: the page sends what the sensory neurons get, the worker answers with the
-// spikes of all neurons, then the fly moves. If the brain is slower than real time,
-// the world slows down with it.
+// The terrarium: the world, what the fly senses, what its spikes make it do, and the page.
+// The brain itself runs in brain.js (a worker) and is drawn by brainview.js. The world advances
+// in steps of CHUNK of brain time: the page sends what the sensory neurons get, the worker
+// answers with the spikes of all neurons, then the fly moves. If the brain is slower than real
+// time, the world slows down with it.
+import { BrainView, GROUPS } from "./brainview.js";
 
 const CHUNK = 0.02; // s of brain time per round trip to the worker
 const ARENA_R = 16; // mm, radius of the dish
@@ -16,8 +17,8 @@ const LOOM_MIN = 50, LOOM_GAIN = 0.5, LOOM_MAX = 150;
 const OMMATIDIUM_SR = 0.0076; // solid angle of one ommatidium (~5 x 5 degrees)
 const OMMATIDIA = 721; // per eye, as in NeuroMechFly
 const SHADOW_R = 6, SHADOW_H = 60, SHADOW_FALL_S = 0.6; // mm, mm, s
-// Motor side, as run_escape.py plus MN9 and grooming: Hz for a full-strength command
-const FULL = { GF: 50, DNa: 40, MDN: 40, MN9: 40, groom: 20 };
+// Motor side, as run_escape.py plus MN9, grooming and TTMn: Hz for a full-strength command
+const FULL = { GF: 50, DNa: 40, MDN: 40, MN9: 40, groom: 20, TTMn: 50 };
 const RUN_HOLD_S = 0.6, HOLD_S = 0.2; // s the commands linger after the neurons fall silent
 // The fly jumps when the jump muscle motor neuron TTMn fires (male CNS). FlyWire ends at the
 // neck and has no TTMn; there a giant fibre spike stands in for it (a made-up rule).
@@ -25,34 +26,37 @@ const RUN_HOLD_S = 0.6, HOLD_S = 0.2; // s the commands linger after the neurons
 const JUMP_HZ = 25;
 const FLIGHT_S = 0.5, FLIGHT_SPEED = 25; // s, mm/s: a hop across part of the dish
 const TURN_RATE = 4; // rad/s at full DNa difference
-const METERS = [
-  ["GF", "Giant fibre", "DNp01: escape"],
-  ["TTMn", "Jump", "TTMn, motor neuron of the jump muscle (in the nerve cord)"],
-  ["DNa", "Turn", "DNa01+DNa02, right minus left"],
-  ["MDN", "Backwards", "MDN, the \"moonwalker\" neurons"],
-  ["MN9", "Proboscis", "motor neuron MN9: feed"],
-  ["groom", "Antennal grooming", "aDN1 / aDN2"],
-];
-FULL.TTMn = 50;
 // spikes/s: a brain this busy long after its last input is stuck in a self-sustaining wave;
 // OVERLOAD_SPIKES is more than any stimulus here causes without one (loom on both eyes: ~150k)
 const CALM_SPIKES = 20000, OVERLOAD_SPIKES = 250000;
+const SENSE_MAX = { sugar: TASTE_HZ, bitter: TASTE_HZ, antenna: ANTENNA_HZ, loom: LOOM_MAX };
+const SENSE_CELLS = { sugar: "sugar neurons", bitter: "bitter neurons", antenna: "Johnston’s organ neurons", loom: "looming detectors" };
+const ACTION_CELLS = { GF: "giant fibre DNp01", TTMn: "jump motor neuron", DNa: "DNa01 + DNa02", MDN: "MDN", MN9: "proboscis MN9", groom: "aDN1 / aDN2" };
+const STATUS = {
+  wait: ["Waiting for the brain…", ""],
+  jumpTTMn: ["Jumping — its jump neuron TTMn fired", "alarm"],
+  jumpGF: ["Jumping — its giant fibre fired (our rule for the female)", "alarm"],
+  run: ["Running away — its giant fibre fired", "alarm"],
+  back: ["Backing up — its MDN neurons fired", "alarm"],
+  groom: ["Cleaning its antennae — aDN1/aDN2 fired", "groom"],
+  feed: ["Feeding — MN9 extended the proboscis", "feed"],
+  stroll: ["Strolling — the brain is quiet, so this part is made up", ""],
+  stand: ["Standing still — the brain is quiet", ""],
+};
 
 const $ = (id) => document.getElementById(id);
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const hold = (old, now, decay) => (Math.abs(now) >= Math.abs(old) * decay ? now : old * decay);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-const rgb = (hex) => [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16));
-
 const SIDES = ["left", "right"];
 
 // ---------------------------------------------------------------- world
-const fly = { x: 0, y: 0, heading: Math.PI / 2, z: 0, speed: 0, legs: 0, proboscis: 0, groom: 0, flightT: -1, doing: "" };
+const fly = { x: 0, y: 0, heading: Math.PI / 2, z: 0, speed: 0, legs: 0, proboscis: 0, groom: 0, flightT: -1, doing: "wait" };
 const cmd = { run: 0, turn: 0, back: 0, feed: 0, groom: 0 };
 const wander = { walking: true, timer: 2, turn: 0 };
 let drops = [], puffs = [], shadows = [];
-let simTime = 0, eyesBefore = null;
+let simTime = 0, eyesBefore = null, input = {};
 
 function shadowHeight(sh) {
   const t = simTime - sh.t;
@@ -81,27 +85,28 @@ function darkArea() {
 
 // Input rate of each sensory group for the next CHUNK: {"group.side": Hz}
 function senses() {
-  const input = {};
+  const now = {};
   if (fly.flightT < 0) {
     const hx = fly.x + Math.cos(fly.heading) * 1.2, hy = fly.y + Math.sin(fly.heading) * 1.2;
-    for (const d of drops) if (Math.hypot(d.x - hx, d.y - hy) < d.r) input[d.kind + ".left"] = input[d.kind + ".right"] = TASTE_HZ;
+    for (const d of drops) if (Math.hypot(d.x - hx, d.y - hy) < d.r) now[d.kind + ".left"] = now[d.kind + ".right"] = TASTE_HZ;
   }
   // a puff bends the antennae the more, the closer it is: ANTENNA_HZ right at the fly, 0 at PUFF_REACH
   let wind = 0;
   for (const p of puffs) {
     if (simTime - p.t < PUFF_S) wind = Math.max(wind, 1 - Math.hypot(p.x - fly.x, p.y - fly.y) / PUFF_REACH);
   }
-  if (wind > 0) input["antenna.left"] = input["antenna.right"] = Math.round(ANTENNA_HZ * wind);
+  if (wind > 0) now["antenna.left"] = now["antenna.right"] = Math.round(ANTENNA_HZ * wind);
   const eyes = darkArea();
   if (eyesBefore) {
     SIDES.forEach((s, k) => {
       const hz = clamp(LOOM_GAIN * ((eyes[k] - eyesBefore[k]) / CHUNK - LOOM_MIN), 0, LOOM_MAX);
-      if (hz > 0) input["loom." + s] = Math.round(hz);
+      if (hz > 0) now["loom." + s] = Math.round(hz);
     });
   }
   eyesBefore = eyes;
-  if (Object.keys(input).length) lastInput = simTime;
-  return input;
+  if (Object.keys(now).length) lastInput = simTime;
+  input = now;
+  return now;
 }
 
 // Spike rates of the read-out neurons -> what the fly does for the next CHUNK
@@ -117,10 +122,7 @@ function behave(hz) {
   const turn = -cmd.turn * TURN_RATE;
   const jump = hz.TTMn ? (hz.TTMn[0] + hz.TTMn[1]) / 2 : gf;
   if (fly.flightT >= 0 || jump >= JUMP_HZ) {
-    if (fly.flightT < 0) {
-      fly.flightT = 0;
-      fly.doing = hz.TTMn ? "jumped: TTMn, the jump motor neuron" : "jumped: a giant fibre spike (a made-up rule)";
-    }
+    if (fly.flightT < 0) (fly.flightT = 0), (fly.doing = hz.TTMn ? "jumpTTMn" : "jumpGF");
     fly.flightT += dt;
     fly.heading += turn * dt;
     fly.speed = FLIGHT_SPEED;
@@ -129,18 +131,18 @@ function behave(hz) {
   } else if (cmd.run > 0.2) {
     fly.speed = 18 * cmd.run;
     fly.heading += turn * dt;
-    fly.doing = "runs away: giant fibre";
+    fly.doing = "run";
   } else if (cmd.back > 0.2) {
     fly.speed = -8 * cmd.back;
     fly.heading += turn * dt;
-    fly.doing = "backs up: MDN";
+    fly.doing = "back";
   } else if (cmd.groom > 0.3) {
     fly.speed = 0;
     fly.groom += dt;
-    fly.doing = "cleans its antennae: aDN1/aDN2";
+    fly.doing = "groom";
   } else if (cmd.feed > 0.3) {
     fly.speed = 0;
-    fly.doing = "feeds: MN9 extended the proboscis";
+    fly.doing = "feed";
     const hx = fly.x + Math.cos(fly.heading) * 1.2, hy = fly.y + Math.sin(fly.heading) * 1.2;
     for (const d of drops) if (d.kind === "sugar" && Math.hypot(d.x - hx, d.y - hy) < d.r) d.r -= 0.25 * dt;
     drops = drops.filter((d) => d.r > 0.6);
@@ -155,7 +157,7 @@ function behave(hz) {
     wander.turn += (-wander.turn * dt) / 0.4 + gauss * 2.5 * Math.sqrt(dt);
     fly.speed = wander.walking ? 6 : 0;
     fly.heading += (wander.walking ? wander.turn : 0) * dt + turn * dt;
-    fly.doing = wander.walking ? "strolls (made up: the brain is silent)" : "stands (made up)";
+    fly.doing = wander.walking ? "stroll" : "stand";
   }
   fly.proboscis += ((cmd.feed > 0.3 ? 1 : 0) - fly.proboscis) * 0.3;
 
@@ -178,18 +180,18 @@ function behave(hz) {
 
 // ---------------------------------------------------------------- brain
 // Everything that depends on the connectome is set by loadBrain()
-let meta, OUT, outOf, sideOf, shown; // shown: smoothed Hz for the meters
+let meta, OUT, outOf, sideOf, shown; // shown: smoothed output rates (Hz) for the page
 let worker, ready = false, pending = false, wallRef = null, loads = 0;
 let spikesPerS = 0, lastInput = 0; // lastInput: brain time of the last sensory input
+const view = new BrainView($("brain"), $("brain-overlay"));
 
 async function loadBrain(version) {
   const load = ++loads;
   ready = pending = false;
   worker?.terminate();
-  $("loading").style.display = "flex";
-  $("loading").textContent = "loading the brain…";
+  setLoading("loading the brain…");
   const base = new URL(`data/${version}/`, location.href).href;
-  const [m, xy] = await Promise.all([
+  const [m, xyz] = await Promise.all([
     fetch(base + "meta.json").then((r) => r.json()),
     fetch(base + "map.bin").then((r) => r.arrayBuffer()),
   ]);
@@ -201,28 +203,41 @@ async function loadBrain(version) {
   OUT.forEach((k, o) => SIDES.forEach((s, si) => meta.groups[k][s].forEach((i) => ((outOf[i] = o), (sideOf[i] = si)))));
   shown = Object.fromEntries(OUT.map((k) => [k, 0]));
   spikesPerS = 0;
-  setupMap(new Uint16Array(xy));
-  setupMeters();
+  rateHistory.fill(0);
+  view.setBrain(meta, xyz);
+  const count = meta.n.toLocaleString("en");
+  $("brain-sub").textContent = `${version === "mcns" ? "male" : "female"} · ${count} neurons`;
+  $("intro-count").textContent = count;
+  setPressed("[data-view]", (b) => b.dataset.view === meta.start_view);
+  buildChips();
+  buildMeters();
   startBrain();
 }
 
 function startBrain() {
   worker?.terminate();
   ready = pending = false;
-  $("loading").style.display = "flex";
+  setLoading("loading the brain…");
   worker = new Worker("brain.js", { type: "module" });
   worker.onmessage = ({ data }) => {
-    if (data.type === "progress") $("loading").textContent = data.text;
+    if (data.type === "progress") setLoading(data.text);
     else if (data.type === "ready") {
       ready = true;
       wallRef = null;
       lastInput = simTime;
       speedMark = [performance.now(), simTime];
-      $("loading").style.display = "none";
+      setLoading(null);
     } else if (data.type === "spikes") onSpikes(data.spikes);
   };
-  worker.onerror = (e) => ($("loading").textContent = "the brain failed to load: " + e.message);
+  worker.onerror = (e) => setLoading("the brain failed to load: " + e.message);
   worker.postMessage({ type: "load", base: new URL(`data/${meta.version}/`, location.href).href, shuffled: $("shuffled").checked });
+}
+
+function setLoading(text) {
+  for (const id of ["loading", "brain-loading"]) {
+    $(id).hidden = !text;
+    if (text) $(id).textContent = text;
+  }
 }
 
 function onSpikes(spikes) {
@@ -231,8 +246,8 @@ function onSpikes(spikes) {
   for (const i of spikes) {
     const o = outOf[i];
     if (o >= 0) hz[OUT[o]][sideOf[i]] += 1 / CHUNK;
-    light(i);
   }
+  view.spike(spikes);
   behave(hz);
   const now = {
     GF: (hz.GF[0] + hz.GF[1]) / 2, DNa: hz.DNa[1] - hz.DNa[0], MDN: hz.MDN[0] + hz.MDN[1],
@@ -241,6 +256,7 @@ function onSpikes(spikes) {
   const k = 1 - Math.exp(-CHUNK / 0.15);
   for (const name of OUT) shown[name] += (now[name] - shown[name]) * k;
   spikesPerS += (spikes.length / CHUNK - spikesPerS) * k;
+  view.setActivity(input, shown);
   // No fatigue in this model: a brain kicked into a self-sustaining wave never calms down
   $("calm").hidden = !(spikesPerS > OVERLOAD_SPIKES || (simTime - lastInput > 1.5 && spikesPerS > CALM_SPIKES));
   pump();
@@ -258,153 +274,103 @@ function pump() {
   }
 }
 
-// ---------------------------------------------------------------- brain map
-const mapCanvas = $("map"), mctx = mapCanvas.getContext("2d");
-const MAP_W = 356, MAX_MAP_H = 400, MARGIN = 8;
-const ROLE_COLORS = ["#ffd27a", ...["--sugar", "--bitter", "--antenna", "--loom", "--readout"].map(css)].map(rgb);
-// the starting view: FlyWire is a brain, seen from the front; the male CNS also has the nerve
-// cord, which hides behind the brain from the front, so it starts seen from above
-const MAP_TITLES = { 783: "Brain in 3D, from the front", mcns: "Brain and nerve cord in 3D, from above" };
-const LABELS = { GF: "GF", DNa: "DNa", MDN: "MDN", MN9: "MN9", groom: "aDN", TTMn: "TTMn" };
-const NO_POSITION = -32768;
-let MAP_H, xyz, mapScale, px, py, role, background, frameImage, frame32, glow, lit, readouts, labelAt;
-let yaw = 0, pitch = 0, turned = true; // rotation of the 3D map; turned: needs projecting again
-
-// Cell bodies (3D, 0.1 µm, as exported) -> sizes, colours; the picture is made by project()
-function setupMap(buffer) {
-  xyz = new Int16Array(buffer);
-  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
-  for (let i = 0; i < meta.n; i++) {
-    if (xyz[3 * i] === NO_POSITION) continue;
-    x0 = Math.min(x0, xyz[3 * i]), x1 = Math.max(x1, xyz[3 * i]);
-    y0 = Math.min(y0, xyz[3 * i + 1]), y1 = Math.max(y1, xyz[3 * i + 1]);
-  }
-  // the starting view fits into MAP_W x MAX_MAP_H (the male CNS with its nerve cord is tall)
-  mapScale = Math.min((MAP_W - 2 * MARGIN) / (x1 - x0), (MAX_MAP_H - 2 * MARGIN - 12) / (y1 - y0));
-  MAP_H = Math.round((y1 - y0) * mapScale) + 2 * MARGIN + 12;
-  mapCanvas.width = MAP_W;
-  mapCanvas.height = MAP_H;
-  $("map-title").textContent = MAP_TITLES[meta.version];
-  role = new Uint8Array(meta.n);
-  meta.inputs.forEach((k, r) => SIDES.forEach((s) => meta.groups[k][s].forEach((i) => (role[i] = r + 1))));
-  readouts = [];
-  for (let i = 0; i < meta.n; i++) if (outOf[i] >= 0) (role[i] = 5), readouts.push(i);
-  px = new Int16Array(meta.n);
-  py = new Int16Array(meta.n);
-  background = mctx.createImageData(MAP_W, MAP_H);
-  frameImage = mctx.createImageData(MAP_W, MAP_H);
-  frame32 = new Uint32Array(frameImage.data.buffer);
-  glow = new Float32Array(meta.n);
-  lit = [];
-  yaw = pitch = 0;
-  turned = true;
-}
-
-// Turn the cells (yaw about the screen's vertical, then pitch about its horizontal axis), drop
-// the depth: pixels, the density background and the labels of the read-out neurons
-function project() {
-  const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
-  const s = mapScale, midX = MAP_W / 2, midY = 12 + (MAP_H - 12) / 2;
-  const count = new Float32Array(MAP_W * MAP_H);
-  for (let i = 0; i < meta.n; i++) {
-    const x = xyz[3 * i], y = xyz[3 * i + 1], z = xyz[3 * i + 2];
-    const X = Math.round(midX + (x * cy + z * sy) * s);
-    const Y = Math.round(midY + (y * cp - (z * cy - x * sy) * sp) * s);
-    const inside = x !== NO_POSITION && X > 0 && X < MAP_W - 1 && Y > 13 && Y < MAP_H - 1;
-    px[i] = inside ? X : -1;
-    py[i] = Y;
-    if (inside) count[Y * MAP_W + X]++;
-  }
-  const max = count.reduce((a, b) => Math.max(a, b)), bg = rgb("#13151a");
-  for (let p = 0; p < count.length; p++) {
-    const f = Math.sqrt(count[p] / max) * 0.4;
-    background.data.set([bg[0] + (150 - bg[0]) * f, bg[1] + (165 - bg[1]) * f, bg[2] + (190 - bg[2]) * f, 255], 4 * p);
-  }
-  labelAt = [];
-  for (const k of OUT) {
-    const ns = readouts.filter((i) => OUT[outOf[i]] === k && px[i] >= 0);
-    if (!ns.length) continue;
-    const i = ns.reduce((a, b) => (px[b] > px[a] ? b : a));
-    let y = py[i] + 3;
-    while (labelAt.some(([, x, ly]) => Math.abs(x - px[i] - 4) < 24 && Math.abs(ly - y) < 10)) y += 10; // no overlaps
-    labelAt.push([LABELS[k], px[i] + 4, y]);
-  }
-  turned = false;
-}
-
-let drag = null;
-mapCanvas.addEventListener("pointerdown", (e) => {
-  drag = [e.clientX, e.clientY, yaw, pitch];
-  mapCanvas.setPointerCapture(e.pointerId);
-});
-mapCanvas.addEventListener("pointermove", (e) => {
-  if (!drag) return;
-  yaw = drag[2] + (e.clientX - drag[0]) * 0.01;
-  pitch = clamp(drag[3] + (e.clientY - drag[1]) * 0.01, -Math.PI / 2, Math.PI / 2);
-  turned = true;
-});
-for (const type of ["pointerup", "pointercancel"]) mapCanvas.addEventListener(type, () => (drag = null));
-mapCanvas.addEventListener("dblclick", () => ((yaw = pitch = 0), (turned = true)));
-
-function light(i) {
-  if (glow[i] < 0.05) lit.push(i);
-  glow[i] += 1;
-}
-function drawMap(dt) {
-  if (!frameImage) return;
-  if (turned) project();
-  frameImage.data.set(background.data);
-  const fade = Math.exp(-dt / 0.3);
-  const still = [];
-  for (const i of lit) {
-    glow[i] *= fade;
-    if (glow[i] < 0.05) continue;
-    still.push(i);
-    if (px[i] < 0) continue; // no known position, or turned out of the picture
-    const c = ROLE_COLORS[role[i]], f = Math.min(1, 0.45 + 0.3 * glow[i]);
-    frame32[py[i] * MAP_W + px[i]] = (255 << 24) | ((c[2] * f) << 16) | ((c[1] * f) << 8) | (c[0] * f);
-  }
-  lit = still;
-  for (const i of readouts) {
-    if (px[i] < 0) continue;
-    const c = ROLE_COLORS[5], f = glow[i] > 0.05 ? 1 : 0.35;
-    const v = (255 << 24) | ((c[2] * f) << 16) | ((c[1] * f) << 8) | (c[0] * f);
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) frame32[(py[i] + dy) * MAP_W + px[i] + dx] = v;
-  }
-  mctx.putImageData(frameImage, 0, 0);
-  mctx.font = "10px ui-monospace, monospace";
-  mctx.fillStyle = "rgba(235,235,235,0.85)";
-  mctx.fillText(`${meta.n.toLocaleString("en")} neurons · ${Math.round(spikesPerS).toLocaleString("en")} spikes/s`, 6, 11);
-  for (const [text, x, y] of labelAt) mctx.fillText(text, x, y);
-}
-
-// ---------------------------------------------------------------- meters
-let meterEls = {};
-function setupMeters() {
-  $("meters").textContent = "";
-  meterEls = {};
-  for (const [key, title, what] of METERS.filter(([key]) => OUT.includes(key))) {
-    $("meters").insertAdjacentHTML(
-      "beforeend",
-      `<span>${title}</span><span class="bar"><i id="bar-${key}"></i></span><span class="hz" id="hz-${key}"></span><span class="what">${what}</span>`,
-    );
-    meterEls[key] = [$("bar-" + key), $("hz-" + key)];
+// ---------------------------------------------------------------- the brain card: chips and info
+let selected = null;
+function buildChips() {
+  selected = null;
+  showInfo(null);
+  for (const [row, kind] of [["chips-senses", "sense"], ["chips-actions", "action"]]) {
+    const el = $(row);
+    el.querySelectorAll("button").forEach((b) => b.remove());
+    for (const key of Object.keys(GROUPS)) {
+      if (GROUPS[key].kind !== kind || !meta.groups[key]) continue;
+      const b = document.createElement("button");
+      b.className = `chip ${kind}`;
+      b.dataset.group = key;
+      b.setAttribute("aria-pressed", "false");
+      if (GROUPS[key].color) b.style.setProperty("--c", GROUPS[key].color);
+      b.innerHTML = "<i></i>";
+      b.append(GROUPS[key].name);
+      b.addEventListener("click", () => select(selected === key ? null : key));
+      b.addEventListener("pointerenter", (e) => e.pointerType === "mouse" && (view.highlight(key), showInfo(key)));
+      b.addEventListener("pointerleave", () => (view.highlight(selected), showInfo(selected)));
+      el.append(b);
+    }
   }
 }
+
+function select(key) {
+  selected = key;
+  view.highlight(key);
+  showInfo(key);
+  setPressed(".chip", (b) => b.dataset.group === key);
+}
+
+function showInfo(key) {
+  const info = $("info");
+  info.hidden = !key;
+  if (!key) return;
+  const g = GROUPS[key], count = meta.groups[key].left.length + meta.groups[key].right.length;
+  info.style.setProperty("--c", g.color ?? css("--action"));
+  info.querySelector("h3").textContent = g.name;
+  info.querySelector(".cells").textContent = `${g.cells} · ${count} neuron${count === 1 ? "" : "s"}`;
+  info.querySelector("p").textContent = g.about;
+}
+
+// ---------------------------------------------------------------- senses -> brain -> actions
+const rateHistory = new Array(100).fill(0); // spikes/s over the last 10 s
+let meters = {};
+function buildMeters() {
+  meters = {};
+  const row = (parent, key, name, detail, color) => {
+    parent.insertAdjacentHTML("beforeend", `<div class="name"><b></b><small></small></div><div class="bar"><i></i></div><div class="hz">0 Hz</div>`);
+    const [label, bar, value] = [...parent.children].slice(-3);
+    label.firstChild.textContent = name;
+    label.lastChild.textContent = detail;
+    if (color) bar.style.setProperty("--c", color);
+    meters[key] = { label: label.firstChild, bar: bar.firstChild, value };
+  };
+  $("senses").textContent = "";
+  $("actions").textContent = "";
+  for (const key of meta.inputs) {
+    const count = meta.groups[key].left.length + meta.groups[key].right.length;
+    row($("senses"), key, GROUPS[key].name, `${count} ${SENSE_CELLS[key]}`, GROUPS[key].color);
+  }
+  for (const key of ["GF", "TTMn", "DNa", "MDN", "MN9", "groom"]) if (OUT.includes(key)) row($("actions"), key, GROUPS[key].name, ACTION_CELLS[key]);
+}
+
 function drawMeters() {
-  for (const key in meterEls) {
-    const [bar, text] = meterEls[key], v = shown[key];
-    bar.style.width = `${Math.min(100, (Math.abs(v) / FULL[key]) * 100)}%`;
-    text.textContent = key === "DNa" ? `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(0)} Hz` : `${v.toFixed(0)} Hz`;
+  if (!meta) return;
+  for (const key of meta.inputs) {
+    const m = meters[key], l = input[key + ".left"] ?? 0, r = input[key + ".right"] ?? 0;
+    m.bar.style.width = `${(Math.max(l, r) / SENSE_MAX[key]) * 100}%`;
+    m.value.textContent = key === "loom" && (l || r) ? `L ${l} · R ${r}` : `${Math.max(l, r)} Hz`;
+    m.value.classList.toggle("on", l > 0 || r > 0);
   }
-  $("doing").textContent = ready ? fly.doing : "waiting for the brain";
+  for (const key of OUT) {
+    const m = meters[key], v = shown[key];
+    m.bar.style.width = `${Math.min(100, (Math.abs(v) / FULL[key]) * 100)}%`;
+    m.value.textContent = `${Math.abs(v).toFixed(0)} Hz`;
+    m.value.classList.toggle("on", Math.abs(v) >= 4);
+    if (key === "DNa") m.label.textContent = Math.abs(v) >= 4 ? (v > 0 ? "Turn right" : "Turn left") : "Turn";
+  }
+  document.querySelectorAll(".chip.action").forEach((b) => b.classList.toggle("firing", Math.abs(shown[b.dataset.group] ?? 0) >= 4));
+  const rate = Math.round(spikesPerS);
+  $("rate").textContent = rate.toLocaleString("en");
+  $("lit").textContent = `${view.lit.length.toLocaleString("en")} of ${meta.n.toLocaleString("en")} neurons lit`;
+  $("brain-stats").textContent = `${rate.toLocaleString("en")} spikes/s · ${view.lit.length.toLocaleString("en")} neurons lit`;
+  const top = Math.max(2000, ...rateHistory);
+  $("spark").setAttribute("points", rateHistory.map((v, i) => `${(i * 220) / 99},${42 - (v / top) * 38}`).join(" "));
+  const [text, tone] = STATUS[ready ? fly.doing : "wait"];
+  $("status").textContent = text;
+  $("status").className = `status ${tone}`;
 }
 
-// ---------------------------------------------------------------- arena
-const arena = $("arena"), ctx = arena.getContext("2d");
+// ---------------------------------------------------------------- the dish
+const arena = $("arena"), ctx = arena.getContext("2d"), PANEL = css("--panel");
 let scale = 1; // px per mm
 function resize() {
-  const size = Math.round(arena.getBoundingClientRect().width * devicePixelRatio);
+  const size = Math.round(arena.getBoundingClientRect().width * Math.min(devicePixelRatio || 1, 2));
   arena.width = arena.height = size;
   scale = size / 2 / (ARENA_R + 1.5);
 }
@@ -413,23 +379,32 @@ new ResizeObserver(resize).observe(arena);
 function drawArena() {
   const W = arena.width;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, W, W);
+  const lamp = ctx.createRadialGradient(W / 2, W * 0.46, 0, W / 2, W * 0.46, W * 0.62);
+  lamp.addColorStop(0, "#2A2A28");
+  lamp.addColorStop(1, PANEL);
+  ctx.fillStyle = lamp;
+  ctx.fillRect(0, 0, W, W);
   ctx.setTransform(scale, 0, 0, -scale, W / 2, W / 2); // mm, y up
-  ctx.fillStyle = css("--dish-rim");
+  ctx.fillStyle = "#8C8578";
   circle(0, 0, ARENA_R + 1);
-  ctx.fillStyle = css("--dish");
+  ctx.fillStyle = "#EDE8DD";
   circle(0, 0, ARENA_R);
+  ctx.strokeStyle = "#DCD5C7";
+  ctx.lineWidth = 0.1;
+  ctx.beginPath();
+  ctx.arc(0, 0, ARENA_R * 0.88, 0, 2 * Math.PI);
+  ctx.stroke();
 
   for (const d of drops) {
-    ctx.fillStyle = d.kind === "sugar" ? "rgba(224,165,38,0.45)" : "rgba(143,91,214,0.4)";
+    ctx.fillStyle = d.kind === "sugar" ? "rgba(227,169,59,0.5)" : "rgba(165,124,242,0.45)";
     circle(d.x, d.y, d.r);
-    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.fillStyle = "rgba(255,255,255,0.75)";
     circle(d.x - d.r * 0.35, d.y + d.r * 0.35, d.r * 0.2);
   }
   for (const p of puffs) {
     const age = (simTime - p.t) / PUFF_S;
     if (age > 1) continue;
-    ctx.strokeStyle = `rgba(42,157,143,${1 - age})`;
+    ctx.strokeStyle = `rgba(63,194,174,${1 - age})`;
     ctx.lineWidth = 0.3;
     for (const f of [1, 0.7, 0.4]) {
       ctx.beginPath();
@@ -535,26 +510,39 @@ function drawFly() {
   }
 }
 
-// ---------------------------------------------------------------- input and the main loop
+// ---------------------------------------------------------------- controls and the main loop
+function setPressed(selector, test) {
+  for (const b of document.querySelectorAll(selector)) b.setAttribute("aria-pressed", test(b));
+}
+
 let tool = "sugar";
 for (const b of document.querySelectorAll("[data-tool]")) {
   b.addEventListener("click", () => {
     tool = b.dataset.tool;
-    for (const o of document.querySelectorAll("[data-tool]")) o.setAttribute("aria-pressed", o === b);
+    setPressed("[data-tool]", (o) => o === b);
   });
 }
-$("clear").addEventListener("click", () => (drops = puffs = shadows = []));
-$("shuffled").addEventListener("change", () => meta && startBrain());
 for (const b of document.querySelectorAll("[data-brain]")) {
   b.addEventListener("click", () => {
-    for (const o of document.querySelectorAll("[data-brain]")) o.setAttribute("aria-pressed", o === b);
+    setPressed("[data-brain]", (o) => o === b);
     loadBrain(b.dataset.brain);
   });
 }
+for (const b of document.querySelectorAll("[data-view]")) {
+  b.addEventListener("click", () => {
+    view.setView(b.dataset.view);
+    setPressed("[data-view]", (o) => o === b);
+  });
+}
+$("zoom-in").addEventListener("click", () => view.zoom(1.25));
+$("zoom-out").addEventListener("click", () => view.zoom(0.8));
+$("clear").addEventListener("click", () => (drops = puffs = shadows = []));
+$("shuffled").addEventListener("change", () => meta && startBrain());
 $("calm").querySelector("button").addEventListener("click", () => {
   worker.postMessage({ type: "reset" });
   $("calm").hidden = true;
 });
+
 function place(tool, x, y) {
   if (Math.hypot(x, y) > ARENA_R) return;
   if (tool === "sugar" || tool === "bitter") drops.push({ x, y, r: DROP_R, kind: tool });
@@ -567,18 +555,23 @@ arena.addEventListener("pointerdown", (e) => {
   place(tool, ((e.clientX - rect.left) / rect.width - 0.5) * size, -((e.clientY - rect.top) / rect.height - 0.5) * size);
 });
 
-let lastFrame = performance.now(), speedMark = [performance.now(), 0];
+let lastFrame = performance.now(), speedMark = [performance.now(), 0], sampled = 0;
 function frame(now) {
   const dt = Math.min((now - lastFrame) / 1000, 0.1);
   lastFrame = now;
   pump();
+  if (now - sampled > 100) {
+    sampled = now;
+    rateHistory.push(spikesPerS);
+    rateHistory.shift();
+  }
   if (now - speedMark[0] > 1000) {
     const ratio = (simTime - speedMark[1]) / ((now - speedMark[0]) / 1000);
-    $("speed").textContent = !ready ? "" : ratio > 0.93 ? "the brain keeps up with real time" : `the brain lags: time ×${ratio.toFixed(2)}`;
+    $("speed").textContent = !ready ? "" : ratio > 0.93 ? "real time" : `slowed ×${ratio.toFixed(2)}`;
     speedMark = [now, simTime];
   }
   drawArena();
-  drawMap(dt);
+  view.draw(dt);
   drawMeters();
   requestAnimationFrame(frame);
 }

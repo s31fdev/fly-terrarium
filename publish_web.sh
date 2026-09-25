@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 name=$(git config user.name)
 email=$(git config user.email)
 site=$(mktemp -d)
-cp web/index.html web/app.js web/brain.js web/icon.svg "$site/"
+cp web/index.html web/*.js web/icon.svg "$site/"
 cp web/SITE_README.md "$site/README.md"
 cp LICENSE "$site/"
 for v in 783 mcns; do

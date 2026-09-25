@@ -458,10 +458,31 @@ The female and the male answer the same stimuli differently:
   happen yet. The Python model behaves the same way. The model has no neuron fatigue, so the wave does not
   die out by itself, and the browser computes the brain 10–25 times slower than real time. In that case
   the page shows a "Calm the brain" button that puts all neurons back to rest.
-- **The map** is three-dimensional: cell bodies in their places, the brain turns with the mouse, a double
-  click brings back the starting view. The female starts seen from the front, the male from above,
-  otherwise the nerve cord hides behind the brain. The rotation is computed on the page itself, without
-  3D libraries.
+
+The page is plain HTML and JavaScript without a build step: `index.html` (layout and text), `app.js`
+(the world, the senses, the fly's behaviour, the dish and the readouts), `brainview.js` (the brain
+panel) and `brain.js` (the model, in a worker). The design was drawn first as a mockup on a Claude
+Design canvas. The page has:
+
+- **The dish and the brain side by side.** A status line says in plain words what the fly is doing
+  and which neurons made it (or that the brain is quiet and the stroll is made up).
+- **The brain panel.** Every cell body in 3D: female 138,625 of 138,639 neurons, male 141,000 of
+  165,122 (sensory neurons have their bodies outside the nervous system). Neurons flash in the colour of
+  their group: senses in the colour of their tool, the neurons we read as red rings, everything else
+  warm yellow. Drag or use the arrow keys to turn, scroll or pinch to zoom towards the pointer,
+  double-click to go back; Front / Top / Side views. Both connectomes are exported in the same frame
+  (x to the fly's right, y ventral), and the direction of "forwards" is taken from the data (the
+  antennal lobes' projection neurons lie in front of the Kenyon cells), so the views are anatomical for
+  both flies. The female starts from the front, the male from above, otherwise the nerve cord hides
+  behind the brain. The chips (Sweet taste, Eyes, Escape, …) highlight a group, dim the rest and explain
+  what those neurons do; active groups get labels such as "Left eye · 120 Hz in" or "Escape · 125 Hz".
+  No 3D library: the rotation is a few lines on the page.
+- **Senses → brain → actions.** What each sensory group gets, the brain's spikes per second with a
+  10-second trace, and what each output group fires.
+- **Explanations for anyone:** how the connectome was made, the neuron model as a leaky bucket, how the
+  wiring decides, the 20 ms loop, why only busy neurons cost time, the shuffle control; what is real and
+  what is made up; the female and the male side by side; sources and licenses; a link to the author's
+  GitHub.
 
 ## How it works
 
