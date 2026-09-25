@@ -8,6 +8,7 @@ cd "$(dirname "$0")"
 name=$(git config user.name)
 email=$(git config user.email)
 site=$(mktemp -d)
+trap 'rm -rf "$site"' EXIT # also when a step fails, e.g. the push
 cp web/index.html web/*.js web/icon.svg "$site/"
 cp web/SITE_README.md "$site/README.md"
 cp LICENSE "$site/"
@@ -16,11 +17,8 @@ for v in 783 mcns; do
   cp web/data/$v/connectome.bin.gz.* web/data/$v/map.bin web/data/$v/meta.json "$site/data/$v/"
 done
 touch "$site/.nojekyll" # plain files, no Jekyll build
-cd "$site"
-git init -q -b gh-pages
-git add -A
-git -c user.name="$name" -c user.email="$email" commit -q -m "Fly terrarium: static site"
-git -c credential.helper= -c "credential.helper=!gh auth git-credential" \
+git -C "$site" init -q -b gh-pages
+git -C "$site" add -A
+git -C "$site" -c user.name="$name" -c user.email="$email" commit -q -m "Fly terrarium: static site"
+git -C "$site" -c credential.helper= -c "credential.helper=!gh auth git-credential" \
   push -f https://github.com/s31fdev/fly-terrarium.git gh-pages
-cd - > /dev/null
-rm -rf "$site"

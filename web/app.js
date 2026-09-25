@@ -185,16 +185,23 @@ let worker, ready = false, pending = false, wallRef = null, loads = 0;
 let spikesPerS = 0, lastInput = 0; // lastInput: brain time of the last sensory input
 const view = new BrainView($("brain"), $("brain-overlay"));
 
+const FAILED = ". Pick the brain again to retry.";
+
 async function loadBrain(version) {
   const load = ++loads;
-  ready = pending = false;
-  worker?.terminate();
-  setLoading("loading the brain…");
-  const base = new URL(`data/${version}/`, location.href).href;
-  const [m, xyz] = await Promise.all([
-    fetch(base + "meta.json").then((r) => r.json()),
-    fetch(base + "map.bin").then((r) => r.arrayBuffer()),
-  ]);
+  stopBrain();
+  const get = async (name) => {
+    const response = await fetch(new URL(`data/${version}/${name}`, location.href));
+    if (!response.ok) throw new Error(`${name}: HTTP ${response.status}`);
+    return response;
+  };
+  let m, xyz;
+  try {
+    [m, xyz] = await Promise.all([get("meta.json").then((r) => r.json()), get("map.bin").then((r) => r.arrayBuffer())]);
+  } catch (error) {
+    if (load === loads) setLoading(`the brain failed to load: ${error.message}${FAILED}`);
+    return;
+  }
   if (load !== loads) return; // another brain was picked meanwhile
   meta = m;
   OUT = meta.outputs;
@@ -202,8 +209,6 @@ async function loadBrain(version) {
   sideOf = new Uint8Array(meta.n);
   OUT.forEach((k, o) => SIDES.forEach((s, si) => meta.groups[k][s].forEach((i) => ((outOf[i] = o), (sideOf[i] = si)))));
   shown = Object.fromEntries(OUT.map((k) => [k, 0]));
-  spikesPerS = 0;
-  rateHistory.fill(0);
   view.setBrain(meta, xyz);
   const count = meta.n.toLocaleString("en");
   $("brain-sub").textContent = `${version === "mcns" ? "male" : "female"} · ${count} neurons`;
@@ -214,10 +219,18 @@ async function loadBrain(version) {
   startBrain();
 }
 
-function startBrain() {
+// The old brain stops: no worker, no readings left over from it
+function stopBrain() {
   worker?.terminate();
   ready = pending = false;
+  spikesPerS = 0;
+  rateHistory.fill(0);
+  $("calm").hidden = true;
   setLoading("loading the brain…");
+}
+
+function startBrain() {
+  stopBrain();
   worker = new Worker("brain.js", { type: "module" });
   worker.onmessage = ({ data }) => {
     if (data.type === "progress") setLoading(data.text);
@@ -228,9 +241,10 @@ function startBrain() {
       speedMark = [performance.now(), simTime];
       setLoading(null);
     } else if (data.type === "spikes") onSpikes(data.spikes);
+    else if (data.type === "error") setLoading(`the brain failed to load: ${data.text}${FAILED}`);
   };
-  worker.onerror = (e) => setLoading("the brain failed to load: " + e.message);
-  worker.postMessage({ type: "load", base: new URL(`data/${meta.version}/`, location.href).href, shuffled: $("shuffled").checked });
+  worker.onerror = (e) => setLoading(`the brain failed to load: ${e.message || "brain.js did not start"}${FAILED}`);
+  worker.postMessage({ type: "load", base: new URL(`data/${meta.version}/`, location.href).href, meta, shuffled: $("shuffled").checked });
 }
 
 function setLoading(text) {
@@ -275,7 +289,7 @@ function pump() {
 }
 
 // ---------------------------------------------------------------- the brain card: chips and info
-let selected = null;
+let selected = null, chipsFiring = [];
 function buildChips() {
   selected = null;
   showInfo(null);
@@ -297,6 +311,7 @@ function buildChips() {
       el.append(b);
     }
   }
+  chipsFiring = [...document.querySelectorAll(".chip.action")];
 }
 
 function select(key) {
@@ -339,31 +354,38 @@ function buildMeters() {
   for (const key of ["GF", "TTMn", "DNa", "MDN", "MN9", "groom"]) if (OUT.includes(key)) row($("actions"), key, GROUPS[key].name, ACTION_CELLS[key]);
 }
 
+// Runs every frame: touch the page only where something changed (#status is a live region,
+// and screen readers may read out every rewrite)
+const setText = (el, text) => el.textContent !== text && (el.textContent = text);
+
 function drawMeters() {
   if (!meta) return;
   for (const key of meta.inputs) {
     const m = meters[key], l = input[key + ".left"] ?? 0, r = input[key + ".right"] ?? 0;
     m.bar.style.width = `${(Math.max(l, r) / SENSE_MAX[key]) * 100}%`;
-    m.value.textContent = key === "loom" && (l || r) ? `L ${l} · R ${r}` : `${Math.max(l, r)} Hz`;
+    setText(m.value, key === "loom" && (l || r) ? `L ${l} · R ${r}` : `${Math.max(l, r)} Hz`);
     m.value.classList.toggle("on", l > 0 || r > 0);
   }
   for (const key of OUT) {
     const m = meters[key], v = shown[key];
     m.bar.style.width = `${Math.min(100, (Math.abs(v) / FULL[key]) * 100)}%`;
-    m.value.textContent = `${Math.abs(v).toFixed(0)} Hz`;
+    setText(m.value, `${Math.abs(v).toFixed(0)} Hz`);
     m.value.classList.toggle("on", Math.abs(v) >= 4);
-    if (key === "DNa") m.label.textContent = Math.abs(v) >= 4 ? (v > 0 ? "Turn right" : "Turn left") : "Turn";
+    if (key === "DNa") setText(m.label, Math.abs(v) >= 4 ? (v > 0 ? "Turn right" : "Turn left") : "Turn");
   }
-  document.querySelectorAll(".chip.action").forEach((b) => b.classList.toggle("firing", Math.abs(shown[b.dataset.group] ?? 0) >= 4));
-  const rate = Math.round(spikesPerS);
-  $("rate").textContent = rate.toLocaleString("en");
-  $("lit").textContent = `${view.lit.length.toLocaleString("en")} of ${meta.n.toLocaleString("en")} neurons lit`;
-  $("brain-stats").textContent = `${rate.toLocaleString("en")} spikes/s · ${view.lit.length.toLocaleString("en")} neurons lit`;
-  const top = Math.max(2000, ...rateHistory);
-  $("spark").setAttribute("points", rateHistory.map((v, i) => `${(i * 220) / 99},${42 - (v / top) * 38}`).join(" "));
+  for (const b of chipsFiring) b.classList.toggle("firing", Math.abs(shown[b.dataset.group] ?? 0) >= 4);
+  const rate = Math.round(spikesPerS).toLocaleString("en"), lit = view.lit.length.toLocaleString("en");
+  setText($("rate"), rate);
+  setText($("lit"), `${lit} of ${meta.n.toLocaleString("en")} neurons lit`);
+  setText($("brain-stats"), `${rate} spikes/s · ${lit} neurons lit`);
   const [text, tone] = STATUS[ready ? fly.doing : "wait"];
-  $("status").textContent = text;
-  $("status").className = `status ${tone}`;
+  setText($("status"), text);
+  if ($("status").className !== `status ${tone}`) $("status").className = `status ${tone}`;
+}
+
+function drawSpark() {
+  const top = Math.max(2000, ...rateHistory);
+  $("spark").setAttribute("points", rateHistory.map((v, i) => `${(i * 220) / 99},${(42 - (v / top) * 38).toFixed(1)}`).join(" "));
 }
 
 // ---------------------------------------------------------------- the dish
@@ -536,10 +558,18 @@ for (const b of document.querySelectorAll("[data-view]")) {
 }
 $("zoom-in").addEventListener("click", () => view.zoom(1.25));
 $("zoom-out").addEventListener("click", () => view.zoom(0.8));
-$("clear").addEventListener("click", () => (drops = puffs = shadows = []));
+$("clear").addEventListener("click", () => {
+  drops = [];
+  puffs = [];
+  shadows = [];
+});
 $("shuffled").addEventListener("change", () => meta && startBrain());
 $("calm").querySelector("button").addEventListener("click", () => {
   worker.postMessage({ type: "reset" });
+  // the rate is smoothed and the chunk on its way is from before the reset: without this
+  // the button would come right back
+  spikesPerS = 0;
+  lastInput = simTime;
   $("calm").hidden = true;
 });
 
@@ -564,6 +594,7 @@ function frame(now) {
     sampled = now;
     rateHistory.push(spikesPerS);
     rateHistory.shift();
+    drawSpark();
   }
   if (now - speedMark[0] > 1000) {
     const ratio = (simTime - speedMark[1]) / ((now - speedMark[0]) / 1000);

@@ -7,7 +7,8 @@ Writes web/data/<version>/ for FlyWire ("783") and the male CNS ("mcns"):
                            (FlyWire compresses to 30 MB instead of 50)
     map.bin                every neuron's cell body for the 3D brain map: x, y, z (int16, 0.1 µm,
                            -32768 = no position), rotated (never mirrored) so that x points to the
-                           fly's right and y is ventral, the same for both flies
+                           fly's right and y is ventral, the same for both flies; the sensory
+                           neurons of the groups, whose bodies lie outside, are put at their targets
     meta.json              sizes, parts, synapse weight, and the neuron groups the sandbox
                            stimulates / reads
     reference.json         spike rates of brain.py for web/check.mjs
@@ -88,6 +89,15 @@ def group(brain, spec):
     return {s: np.flatnonzero(match & (brain.side == s)).tolist() for s in ("left", "right")}
 
 
+def weighted_median(values, weights):
+    order = np.argsort(values)
+    cumulative = np.cumsum(weights[order])
+    return values[order][np.searchsorted(cumulative, cumulative[-1] / 2)]
+
+
+assert weighted_median(np.array([5.0, 1.0, 100.0]), np.array([2.0, 2.0, 1.0])) == 5.0
+
+
 def planes(a):
     """Byte planes of a little-endian array: all lowest bytes, then the next, ..."""
     return a.view(np.uint8).reshape(-1, a.itemsize).T.tobytes()
@@ -117,6 +127,8 @@ def export(version):
         parts.append(f"connectome.bin.gz.{len(parts)}")
         (out / parts[-1]).write_bytes(blob[k:k + PART_BYTES])
 
+    groups = {k: group(brain, spec) for k, spec in GROUPS[version].items()}
+
     # Brain map: rotate (never mirror) so that x points to the fly's right and y is ventral (the
     # data's own y, in both connectomes); z = x × y then runs along the body, forwards or backwards
     xyz = brain.xyz.astype(float)
@@ -124,19 +136,32 @@ def export(version):
     ex, ey = across * np.eye(3)[0], np.eye(3)[1]
     xyz = xyz @ np.array([ex, ey, np.cross(ex, ey)]).T
     xyz -= (np.nanmin(xyz, axis=0) + np.nanmax(xyz, axis=0)) / 2
+    # Sensory neurons have their cell bodies outside the nervous system: the male CNS has no position
+    # for its taste and antenna neurons. The page highlights and labels those, so they are drawn
+    # where their signal goes: the synapse-weighted median of their targets' cell bodies (a mean
+    # would be pulled into empty space by the few targets whose bodies lie far off, in the nerve cord)
+    soma = xyz.copy()
+    grouped = np.unique([i for g in groups.values() for ids in g.values() for i in ids])
+    placed = 0
+    for i in grouped[np.isnan(soma[grouped, 0])]:
+        targets, weights = post[indptr[i]:indptr[i + 1]], np.abs(synapses[indptr[i]:indptr[i + 1]].astype(float))
+        known = ~np.isnan(soma[targets, 0])
+        if known.any():
+            xyz[i] = [weighted_median(soma[targets[known], a], weights[known]) for a in range(3)]
+            placed += 1
     (out / "map.bin").write_bytes(np.where(np.isnan(xyz), NO_POSITION, np.round(xyz * 10)).astype(np.int16).tobytes())
     # Which way is forwards: the antennal lobes' projection neurons (types like "DA1_lPN") sit in
     # front of the mushroom bodies' Kenyon cells, in both connectomes.
-    # Views as [yaw, pitch] for the page: from the front (dorsal up), from above and from the side
-    # (both with the head up / to the right); the fly's left stays on the left in the first two.
+    # Views as [yaw, pitch] for the page: from the front (facing the fly, dorsal up, so its left is on
+    # the right of the screen; yaw 0 would show it as from behind), from above (head up, its left on
+    # the left) and from the side (head to the right).
     types = brain.cell_type.astype(str)
     projection = np.char.endswith(types, "_lPN") | np.char.endswith(types, "_adPN") | np.char.endswith(types, "_vPN")
     kenyon = np.char.startswith(types, "KC")
     assert projection.sum() > 100 and kenyon.sum() > 1000
     forwards = float(np.sign(np.nanmean(xyz[projection, 2]) - np.nanmean(xyz[kenyon, 2])))
-    views = {"front": [0, 0], "top": [0, forwards * np.pi / 2], "side": [forwards * np.pi / 2, 0]}
+    views = {"front": [np.pi, 0], "top": [0, forwards * np.pi / 2], "side": [forwards * np.pi / 2, 0]}
 
-    groups = {k: group(brain, spec) for k, spec in GROUPS[version].items()}
     w_synapse = W_SYNAPSE / (MCNS_SYNAPSES_PER_FLYWIRE_SYNAPSE if version == "mcns" else 1)
     meta = dict(
         version=version, n=brain.n, m=len(post), w_synapse=w_synapse, parts=parts, size_mb=round(len(blob) / 1e6),
@@ -155,7 +180,8 @@ def export(version):
     (out / "reference.json").write_text(json.dumps(reference), encoding="utf-8")
 
     sizes = {k: f"{len(v['left'])}+{len(v['right'])}" for k, v in groups.items()}
-    print(f"{version}: {len(blob) / 1e6:.1f} MB in {len(parts)} parts; groups (left+right): {sizes}", flush=True)
+    print(f"{version}: {len(blob) / 1e6:.1f} MB in {len(parts)} parts; groups (left+right): {sizes}; "
+          f"{placed} grouped neurons without a cell body put at their targets", flush=True)
 
 
 if __name__ == "__main__":

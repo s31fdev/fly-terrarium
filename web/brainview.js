@@ -49,6 +49,8 @@ export class BrainView {
     this.meta = meta;
     this.xyz = new Int16Array(buffer);
     const n = meta.n;
+    this.X = new Float32Array(n); // turned, before scaling
+    this.Y = new Float32Array(n);
     this.px = new Float32Array(n);
     this.py = new Float32Array(n);
     this.glow = new Float32Array(n);
@@ -66,6 +68,7 @@ export class BrainView {
   }
 
   setView(name) {
+    if (!this.meta) return; // the buttons work before the brain has loaded
     [this.yaw, this.pitch] = this.meta.views[name];
     this.viewName = name;
     this.zoomBy = 1;
@@ -75,7 +78,8 @@ export class BrainView {
   }
 
   zoom(factor, at = null) {
-    const z = Math.min(8, Math.max(0.5, this.zoomBy * factor));
+    if (!this.meta) return;
+    const z =Math.min(8, Math.max(0.5, this.zoomBy * factor));
     if (at) {
       // keep the point under the cursor in place
       const [cx, cy] = [this.W / 2 + this.offset[0], this.H / 2 + this.offset[1]];
@@ -116,9 +120,8 @@ export class BrainView {
 
   // Turn (yaw about the vertical, then pitch about the horizontal axis), scale, drop the depth
   project() {
-    const { xyz, meta, W, H } = this;
+    const { xyz, meta, W, H, X, Y } = this;
     const cy = Math.cos(this.yaw), sy = Math.sin(this.yaw), cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
-    const X = new Float32Array(meta.n), Y = new Float32Array(meta.n);
     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
     for (let i = 0; i < meta.n; i++) {
       const x = xyz[3 * i], y = xyz[3 * i + 1], z = xyz[3 * i + 2];
@@ -137,7 +140,16 @@ export class BrainView {
       this.fitted = true;
     }
     const s = this.scale * this.zoomBy, ox = W / 2 + this.offset[0], oy = H / 2 + this.offset[1];
-    const count = new Float32Array(W * H);
+    // this runs on every frame of a drag: the buffers are kept while the size stays
+    if (this.image?.width !== W || this.image?.height !== H) {
+      this.count = new Float32Array(W * H);
+      this.image = new ImageData(W, H);
+      this.bg.width = this.haze.width = W;
+      this.bg.height = this.haze.height = H;
+    }
+    const { count, image } = this, data = image.data;
+    count.fill(0);
+    data.fill(0);
     for (let i = 0; i < meta.n; i++) {
       if (Number.isNaN(X[i])) {
         this.px[i] = -1;
@@ -152,18 +164,22 @@ export class BrainView {
     // density picture: how many cell bodies sit on each pixel
     let max = 1;
     for (let p = 0; p < count.length; p++) if (count[p] > max) max = count[p];
-    const image = new ImageData(W, H), data = image.data;
     for (let p = 0; p < count.length; p++) {
       if (!count[p]) continue;
-      const f = Math.sqrt(count[p] / max);
-      data.set([150, 165, 190, Math.min(255, 40 + 190 * f)], 4 * p);
+      data[4 * p] = 150;
+      data[4 * p + 1] = 165;
+      data[4 * p + 2] = 190;
+      data[4 * p + 3] = 40 + 190 * Math.sqrt(count[p] / max);
     }
-    this.bg.width = this.haze.width = W;
-    this.bg.height = this.haze.height = H;
     this.bg.getContext("2d").putImageData(image, 0, 0);
+    // the blurred haze is the slow part: left out while the brain is being dragged, back on release
     const hz = this.haze.getContext("2d");
-    hz.filter = "blur(10px)";
-    hz.drawImage(this.bg, 0, 0);
+    hz.clearRect(0, 0, W, H);
+    if (!this.moving) {
+      hz.filter = "blur(10px)";
+      hz.drawImage(this.bg, 0, 0);
+    }
+    this.hazy = !this.moving;
     this.dirty = false;
   }
 
@@ -189,7 +205,7 @@ export class BrainView {
     for (const i of ids) {
       if (this.px[i] < 0) continue;
       if (middle) (sx += this.px[i]), (sy += this.py[i]), k++;
-      else if (!best || this.px[i] > this.px[best]) best = i;
+      else if (best === null || this.px[i] > this.px[best]) best = i;
     }
     if (middle) return k ? [sx / k, sy / k] : null;
     return best === null ? null : [this.px[best], this.py[best]];
@@ -333,6 +349,7 @@ export class BrainView {
     c.addEventListener("pointerdown", (e) => {
       c.setPointerCapture(e.pointerId);
       pointers.set(e.pointerId, local(e));
+      this.moving = true;
       if (pointers.size === 1) drag = [...local(e), this.yaw, this.pitch];
       if (pointers.size === 2) {
         const [a, b] = [...pointers.values()];
@@ -358,13 +375,19 @@ export class BrainView {
     const up = (e) => {
       pointers.delete(e.pointerId);
       if (pointers.size < 2) pinch = null;
-      if (!pointers.size) drag = null;
+      if (pointers.size) return;
+      drag = null;
+      this.moving = false;
+      if (!this.hazy) this.dirty = true; // draw the haze again
     };
     c.addEventListener("pointerup", up);
     c.addEventListener("pointercancel", up);
     c.addEventListener("pointerleave", () => (this.tip.hidden = true));
     c.addEventListener("dblclick", () => this.setView(this.viewName));
     c.addEventListener("wheel", (e) => {
+      // a page scroll passing over the brain goes on; the wheel zooms with Ctrl / ⌘ (also a
+      // trackpad pinch) or once the brain has focus, after a click on it
+      if (!e.ctrlKey && !e.metaKey && document.activeElement !== c) return;
       e.preventDefault();
       this.zoom(Math.exp(-e.deltaY * 0.0015), local(e));
     }, { passive: false });

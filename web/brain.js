@@ -39,9 +39,9 @@ function random(seed) {
 
 // Connectome from the parts written by export_web.py. read(name) -> Promise<Uint8Array>.
 export async function loadConnectome(meta, read) {
-  const parts = await Promise.all(meta.parts.map(read));
-  const blob = new Blob(parts);
-  const bytes = new Uint8Array(await new Response(blob.stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
+  // no references kept to the parts or the blob: the male CNS peaks at ~300 MB here as it is
+  const gzipped = new Blob(await Promise.all(meta.parts.map(read))).stream();
+  const bytes = new Uint8Array(await new Response(gzipped.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
   const n = meta.n, m = meta.m;
   const indptr = new Int32Array(bytes.buffer, 0, n + 1);
   let at = 4 * (n + 1);
@@ -173,9 +173,10 @@ export class Brain {
   }
 }
 
-// Worker protocol. Page -> worker: {type: "load", base, shuffled} once, then
+// Worker protocol. Page -> worker: {type: "load", base, meta, shuffled} once, then
 // {type: "run", ms, input: {"<group>.<side>": Hz}} or {type: "reset"} (all neurons to rest).
-// Worker -> page: {type: "progress", text}, {type: "ready"}, {type: "spikes", spikes (Int32Array), ms, wall}.
+// Worker -> page: {type: "progress", text}, {type: "ready"}, {type: "error", text},
+// {type: "spikes", spikes (Int32Array), ms, wall}.
 if (typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScope) {
   let brain, meta, inputKey = "";
   self.onmessage = async ({ data }) => {
@@ -183,13 +184,22 @@ if (typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScop
       brain?.reset();
       inputKey = "";
     } else if (data.type === "load") {
-      meta = await (await fetch(data.base + "meta.json")).json();
-      self.postMessage({ type: "progress", text: `loading the connectome (${meta.size_mb} MB)…` });
-      const read = async (name) => new Uint8Array(await (await fetch(data.base + name)).arrayBuffer());
-      const connectome = await loadConnectome(meta, read);
-      if (data.shuffled) shuffle(connectome.post);
-      brain = new Brain(connectome);
-      self.postMessage({ type: "ready" });
+      // errors of an async handler never reach the page's worker.onerror: report them
+      try {
+        meta = data.meta;
+        self.postMessage({ type: "progress", text: `loading the connectome (${meta.size_mb} MB)…` });
+        const read = async (name) => {
+          const response = await fetch(data.base + name);
+          if (!response.ok) throw new Error(`${name}: HTTP ${response.status}`);
+          return new Uint8Array(await response.arrayBuffer());
+        };
+        const connectome = await loadConnectome(meta, read);
+        if (data.shuffled) shuffle(connectome.post);
+        brain = new Brain(connectome);
+        self.postMessage({ type: "ready" });
+      } catch (error) {
+        self.postMessage({ type: "error", text: error.message });
+      }
     } else if (data.type === "run") {
       const key = JSON.stringify(data.input);
       if (key !== inputKey) {

@@ -467,14 +467,18 @@ Design canvas. The page has:
 - **The dish and the brain side by side.** A status line says in plain words what the fly is doing
   and which neurons made it (or that the brain is quiet and the stroll is made up).
 - **The brain panel.** Every cell body in 3D: female 138,625 of 138,639 neurons, male 141,000 of
-  165,122 (sensory neurons have their bodies outside the nervous system). Neurons flash in the colour of
+  165,122 (sensory neurons have their bodies outside the nervous system; the male's taste and antenna
+  neurons that the page stimulates are drawn where their synapses go, at the synapse-weighted middle of
+  their targets). Neurons flash in the colour of
   their group: senses in the colour of their tool, the neurons we read as red rings, everything else
-  warm yellow. Drag or use the arrow keys to turn, scroll or pinch to zoom towards the pointer,
-  double-click to go back; Front / Top / Side views. Both connectomes are exported in the same frame
+  warm yellow. Drag or use the arrow keys to turn; zoom with the buttons, a pinch, Ctrl + scroll, or
+  scroll after a click on the brain (so that a page scroll passing over it goes on); double-click to
+  go back; Front / Top / Side views. On a phone a vertical swipe scrolls the page and a sideways one
+  turns the brain. Both connectomes are exported in the same frame
   (x to the fly's right, y ventral), and the direction of "forwards" is taken from the data (the
   antennal lobes' projection neurons lie in front of the Kenyon cells), so the views are anatomical for
-  both flies. The female starts from the front, the male from above, otherwise the nerve cord hides
-  behind the brain. The chips (Sweet taste, Eyes, Escape, …) highlight a group, dim the rest and explain
+  both flies: from the front the fly's left is on the right of the screen, as when facing it. The
+  female starts from the front, the male from above, otherwise the nerve cord hides behind the brain. The chips (Sweet taste, Eyes, Escape, …) highlight a group, dim the rest and explain
   what those neurons do; active groups get labels such as "Left eye · 120 Hz in" or "Escape · 125 Hz".
   No 3D library: the rotation is a few lines on the page.
 - **Senses → brain → actions.** What each sensory group gets, the brain's spikes per second with a
