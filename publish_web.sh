@@ -10,6 +10,7 @@ email=$(git config user.email)
 site=$(mktemp -d)
 cp web/index.html web/app.js web/brain.js "$site/"
 cp web/SITE_README.md "$site/README.md"
+cp LICENSE "$site/"
 for v in 783 mcns; do
   mkdir -p "$site/data/$v"
   cp web/data/$v/connectome.bin.gz.* web/data/$v/map.bin web/data/$v/meta.json "$site/data/$v/"

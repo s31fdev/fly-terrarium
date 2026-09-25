@@ -534,3 +534,12 @@ The female and the male answer the same stimuli differently:
 - The first eye reading compiles the retina code (numba) for about 7 s. `run_live.py vision` does this
   before opening the window, so the window appears with a delay.
 - In `vision.mp4` the fly is small: the camera hangs high so that both the start and the pillar fit in the frame.
+
+## License
+
+The code of this project is under the [MIT license](LICENSE). The connectome data are not part of
+the repository (the scripts download them) and keep their own licenses: FlyWire is
+[CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) (non-commercial use only), the male
+CNS is [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The published site contains data
+derived from both, so it is non-commercial and credits them. The brain model follows Shiu et al.'s
+[code](https://github.com/philshiu/Drosophila_brain_model) (MIT); FlyGym / NeuroMechFly is Apache-2.0.
