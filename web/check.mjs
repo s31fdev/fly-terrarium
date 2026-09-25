@@ -1,6 +1,7 @@
 // Checks brain.js against brain.py: sugar-sensing neurons driven at 200 Hz, 30 trials of 1 s,
 // the same experiment export_web.py ran in Python (web/data/<version>/reference.json).
 // Usage: node web/check.mjs [783|mcns]   (default: both)
+import { openAsBlob } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { Brain, loadConnectome, DT } from "./brain.js";
 
@@ -10,7 +11,7 @@ for (const version of process.argv.slice(2).length ? process.argv.slice(2) : ["7
   const meta = JSON.parse(await readFile(new URL("meta.json", dir)));
   const ref = JSON.parse(await readFile(new URL("reference.json", dir)));
   let start = performance.now();
-  const brain = new Brain(await loadConnectome(meta, async (name) => new Uint8Array(await readFile(new URL(name, dir)))));
+  const brain = new Brain(await loadConnectome(meta, async (name) => (await openAsBlob(new URL(name, dir))).stream()));
   console.log(`${version}: ${meta.n} neurons, ${meta.m} connections, loaded in ${((performance.now() - start) / 1000).toFixed(1)} s`);
 
   const [group, side] = ref.input.split(".");

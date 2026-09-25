@@ -37,20 +37,55 @@ function random(seed) {
   };
 }
 
-// Connectome from the parts written by export_web.py. read(name) -> Promise<Uint8Array>.
-export async function loadConnectome(meta, read) {
-  // no references kept to the parts or the blob: the male CNS peaks at ~300 MB here as it is
-  const gzipped = new Blob(await Promise.all(meta.parts.map(read))).stream();
-  const bytes = new Uint8Array(await new Response(gzipped.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
+// Connectome from the parts written by export_web.py, unpacked while it downloads: the bytes go
+// straight into the final arrays, and nothing else of that size is held (the male CNS peaks at
+// ~220 MB, it was ~500 unpacking it whole). open(name) -> Promise<ReadableStream> of that part.
+export async function loadConnectome(meta, open) {
   const n = meta.n, m = meta.m;
-  const indptr = new Int32Array(bytes.buffer, 0, n + 1);
-  let at = 4 * (n + 1);
-  const post = new Int32Array(m);
-  for (let b = 0; b < 4; b++, at += m) for (let e = 0; e < m; e++) post[e] |= bytes[at + e] << (8 * b);
+  const indptr = new Int32Array(n + 1), post = new Int32Array(m), synapses = new Int16Array(m);
+  // The unpacked stream, in order: indptr, the 4 byte planes of post, the 2 of synapses. Plane b
+  // holds byte b of every element, so it fills every itemsize-th byte of the array's memory from b
+  // (typed arrays are little-endian on every platform browsers run on).
+  const bytes = (a) => new Uint8Array(a.buffer);
+  const planes = [[bytes(indptr), 1, 0, 4 * (n + 1)]];
+  for (let b = 0; b < 4; b++) planes.push([bytes(post), 4, b, m]);
+  for (let b = 0; b < 2; b++) planes.push([bytes(synapses), 2, b, m]);
+
+  // All parts download at once and are read one after another as one gzip stream. Readers, not
+  // for await: Safari cannot iterate a stream.
+  const opened = meta.parts.map(open);
+  opened.forEach((p) => p.catch(() => {})); // a failure is reported once, when its turn comes
+  let k = 0, part = null;
+  const gzipped = new ReadableStream({
+    async pull(controller) {
+      for (; k < opened.length; k++, part = null) {
+        part ??= (await opened[k]).getReader();
+        const { done, value } = await part.read();
+        if (!done) return controller.enqueue(value);
+      }
+      controller.close();
+    },
+  });
+
+  const unpacked = gzipped.pipeThrough(new DecompressionStream("gzip")).getReader();
+  let plane = 0, at = 0; // where the next byte goes
+  for (;;) {
+    const { done, value: chunk } = await unpacked.read();
+    if (done) break;
+    for (let i = 0; i < chunk.length; ) {
+      if (plane === planes.length) throw new Error("the connectome is longer than meta.json says");
+      const [target, stride, first, length] = planes[plane];
+      const take = Math.min(length - at, chunk.length - i);
+      if (stride === 1) target.set(chunk.subarray(i, i + take), at);
+      else for (let k = 0, p = first + stride * at; k < take; k++, p += stride) target[p] = chunk[i + k];
+      i += take;
+      at += take;
+      if (at === length) (plane++), (at = 0);
+    }
+  }
+  if (plane !== planes.length) throw new Error("the connectome is shorter than meta.json says");
   for (let i = 0; i < n; i++) for (let e = indptr[i] + 1; e < indptr[i + 1]; e++) post[e] += post[e - 1];
-  const synapses = new Int16Array(m);
-  for (let e = 0; e < m; e++) synapses[e] = bytes[at + e] | (bytes[at + m + e] << 8);
-  return { n, indptr: indptr.slice(), post, synapses, wSynapse: meta.w_synapse };
+  return { n, indptr, post, synapses, wSynapse: meta.w_synapse };
 }
 
 // Control: every neuron keeps its synapses, but they go to random neurons (like brain.py --shuffled)
@@ -188,12 +223,12 @@ if (typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScop
       try {
         meta = data.meta;
         self.postMessage({ type: "progress", text: `loading the connectome (${meta.size_mb} MB)…` });
-        const read = async (name) => {
+        const open = async (name) => {
           const response = await fetch(data.base + name);
           if (!response.ok) throw new Error(`${name}: HTTP ${response.status}`);
-          return new Uint8Array(await response.arrayBuffer());
+          return response.body;
         };
-        const connectome = await loadConnectome(meta, read);
+        const connectome = await loadConnectome(meta, open);
         if (data.shuffled) shuffle(connectome.post);
         brain = new Brain(connectome);
         self.postMessage({ type: "ready" });
