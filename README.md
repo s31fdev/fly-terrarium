@@ -1,3 +1,5 @@
+<img src="web/icon.svg" width="96" align="right" alt="">
+
 # A fly walks a route (NeuroMechFly v2 / FlyGym 2.1)
 
 A learning project: a physical model of the fruit fly's body (NeuroMechFly v2, the

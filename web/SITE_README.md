@@ -1,3 +1,5 @@
+<img src="icon.svg" width="96" align="right" alt="">
+
 # Fly Terrarium — the site
 
 **[Open it](https://s31fdev.github.io/fly-terrarium/)** · [source code](https://github.com/s31fdev/fly-terrarium/tree/main)
