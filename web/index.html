@@ -89,7 +89,7 @@
   #brain:active { cursor: grabbing; }
   .overlay { position: absolute; inset: 0; pointer-events: none; }
   .stats { position: absolute; left: 16px; top: 14px; font: 13px var(--mono); color: var(--soft); }
-  .hint { position: absolute; right: 16px; top: 14px; font-size: 13px; color: var(--muted); }
+  .hint { position: absolute; right: 16px; top: 14px; max-width: min(250px, 100% - 350px); text-align: right; font-size: 13px; color: var(--muted); } /* clear of the stats on the left */
   .brain-label { position: absolute; left: 0; top: 0; display: flex; flex-direction: column; gap: 1px; padding: 7px 11px; border-radius: 10px; background: rgba(255,107,87,0.16); border: 1px solid rgba(255,107,87,0.6); white-space: nowrap; }
   .brain-label b { font-size: 14px; font-weight: 600; color: var(--action-ink); }
   .brain-label span { font: 12px var(--mono); color: #D9A79F; }
@@ -274,10 +274,10 @@
         </div>
       </div>
       <div class="brain-stage">
-        <canvas id="brain" tabindex="0" aria-label="3D map of the brain's neurons: they light up when they spike. Drag or use the arrow keys to turn; click, then scroll, or pinch to zoom; double-click to go back."></canvas>
+        <canvas id="brain" tabindex="0" aria-label="3D map of the brain's neurons: they light up when they spike. Drag to move it; drag with the right button or use the arrow keys to turn it; click, then scroll, or pinch to zoom; double-click to go back."></canvas>
         <div class="overlay" id="brain-overlay">
           <div class="stats" id="brain-stats"></div>
-          <div class="hint">drag to turn · click, then scroll to zoom</div>
+          <div class="hint">drag to move · right-drag to turn · click, then scroll to zoom</div>
           <div class="tip" data-tip hidden></div>
           <div class="info" id="info" hidden><h3></h3><div class="cells"></div><p></p></div>
         </div>

@@ -471,7 +471,8 @@ Design canvas. The page has:
   neurons that the page stimulates are drawn where their synapses go, at the synapse-weighted middle of
   their targets). Neurons flash in the colour of
   their group: senses in the colour of their tool, the neurons we read as red rings, everything else
-  warm yellow. Drag or use the arrow keys to turn; zoom with the buttons, a pinch, Ctrl + scroll, or
+  warm yellow. Drag to move it, drag with the right button or use the arrow keys to turn it (the side
+  facing you follows the pointer); zoom with the buttons, a pinch, Ctrl + scroll, or
   scroll after a click on the brain while the pointer stays on it (so that a page scroll passing over
   it goes on); double-click to
   go back; Front / Top / Side views. On a phone a vertical swipe scrolls the page and a sideways one

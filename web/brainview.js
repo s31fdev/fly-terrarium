@@ -91,6 +91,13 @@ export class BrainView {
     this.dirty = true;
   }
 
+  // Turn from (yaw, pitch) as by a drag of (right, down): the side facing you follows the pointer
+  // (the depth axis points into the screen, so the yaw goes against the drag)
+  turn(yaw, pitch, right, down) {
+    this.yaw = yaw - right;
+    this.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch + down));
+  }
+
   // The blurred haze is the slow part of a redraw. It is left out while the brain is held, or
   // turned or zoomed in a quick series of steps (from the second step on), and comes back after.
   moving() {
@@ -360,13 +367,13 @@ export class BrainView {
       return [e.clientX - r.left, e.clientY - r.top];
     };
     c.addEventListener("pointerdown", (e) => {
-      // not the right button: its context menu can swallow the release (macOS), and the brain
-      // would then turn with the bare pointer
-      if (e.pointerType === "mouse" && e.button !== 0) return;
+      // the left button moves the brain, the right one turns it; a finger turns it
+      const mode = e.pointerType === "touch" ? "turn" : ["move", null, "turn"][e.button];
+      if (!mode) return;
       c.setPointerCapture(e.pointerId);
       pointers.set(e.pointerId, local(e));
       this.held = this.armed = true;
-      if (pointers.size === 1) drag = [...local(e), this.yaw, this.pitch];
+      if (pointers.size === 1) drag = { mode, from: local(e), yaw: this.yaw, pitch: this.pitch, offset: this.offset };
       if (pointers.size === 2) {
         const [a, b] = [...pointers.values()];
         pinch = Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -382,8 +389,9 @@ export class BrainView {
         this.zoom(d / pinch, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
         pinch = d;
       } else if (drag) {
-        this.yaw = drag[2] + (p[0] - drag[0]) * 0.01;
-        this.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, drag[3] + (p[1] - drag[1]) * 0.01));
+        const dx = p[0] - drag.from[0], dy = p[1] - drag.from[1];
+        if (drag.mode === "move") this.offset = [drag.offset[0] + dx, drag.offset[1] + dy];
+        else this.turn(drag.yaw, drag.pitch, dx * 0.01, dy * 0.01);
         this.dirty = true;
         this.tip.hidden = true;
       }
@@ -402,6 +410,7 @@ export class BrainView {
       this.tip.hidden = true;
       this.armed = false;
     });
+    c.addEventListener("contextmenu", (e) => e.preventDefault()); // the right button turns
     c.addEventListener("dblclick", () => this.setView(this.viewName));
     c.addEventListener("wheel", (e) => {
       // a page scroll passing over the brain goes on; the wheel zooms with Ctrl / ⌘ (also a
@@ -414,8 +423,7 @@ export class BrainView {
       const turn = { ArrowLeft: [-0.15, 0], ArrowRight: [0.15, 0], ArrowUp: [0, -0.15], ArrowDown: [0, 0.15] }[e.key];
       if (turn) {
         this.nudge();
-        this.yaw += turn[0];
-        this.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.pitch + turn[1]));
+        this.turn(this.yaw, this.pitch, ...turn);
         this.dirty = true;
       } else if (e.key === "+" || e.key === "=") this.zoom(1.25);
       else if (e.key === "-") this.zoom(0.8);
