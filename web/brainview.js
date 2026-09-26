@@ -79,7 +79,8 @@ export class BrainView {
 
   zoom(factor, at = null) {
     if (!this.meta) return;
-    const z =Math.min(8, Math.max(0.5, this.zoomBy * factor));
+    this.nudge();
+    const z = Math.min(8, Math.max(0.5, this.zoomBy * factor));
     if (at) {
       // keep the point under the cursor in place
       const [cx, cy] = [this.W / 2 + this.offset[0], this.H / 2 + this.offset[1]];
@@ -88,6 +89,18 @@ export class BrainView {
     }
     this.zoomBy = z;
     this.dirty = true;
+  }
+
+  // The blurred haze is the slow part of a redraw. It is left out while the brain is held, or
+  // turned or zoomed in a quick series of steps (from the second step on), and comes back after.
+  moving() {
+    return this.held || performance.now() < this.stillAt;
+  }
+
+  nudge() {
+    const now = performance.now();
+    if (now - this.lastStep < 200) this.stillAt = now + 200;
+    this.lastStep = now;
   }
 
   highlight(key) {
@@ -172,14 +185,13 @@ export class BrainView {
       data[4 * p + 3] = 40 + 190 * Math.sqrt(count[p] / max);
     }
     this.bg.getContext("2d").putImageData(image, 0, 0);
-    // the blurred haze is the slow part: left out while the brain is being dragged, back on release
-    const hz = this.haze.getContext("2d");
+    const hz = this.haze.getContext("2d"), moving = this.moving();
     hz.clearRect(0, 0, W, H);
-    if (!this.moving) {
+    if (!moving) {
       hz.filter = "blur(10px)";
       hz.drawImage(this.bg, 0, 0);
     }
-    this.hazy = !this.moving;
+    this.hazy = !moving;
     this.dirty = false;
   }
 
@@ -213,6 +225,7 @@ export class BrainView {
 
   draw(dt) {
     if (!this.meta || !this.W) return;
+    if (!this.hazy && !this.moving()) this.dirty = true; // still again: the haze comes back
     if (this.dirty) this.project();
     const { ctx, px, py, glow, W, H } = this;
     ctx.setTransform(this.ratio, 0, 0, this.ratio, 0, 0);
@@ -347,9 +360,12 @@ export class BrainView {
       return [e.clientX - r.left, e.clientY - r.top];
     };
     c.addEventListener("pointerdown", (e) => {
+      // not the right button: its context menu can swallow the release (macOS), and the brain
+      // would then turn with the bare pointer
+      if (e.pointerType === "mouse" && e.button !== 0) return;
       c.setPointerCapture(e.pointerId);
       pointers.set(e.pointerId, local(e));
-      this.moving = true;
+      this.held = this.armed = true;
       if (pointers.size === 1) drag = [...local(e), this.yaw, this.pitch];
       if (pointers.size === 2) {
         const [a, b] = [...pointers.values()];
@@ -373,27 +389,31 @@ export class BrainView {
       }
     });
     const up = (e) => {
-      pointers.delete(e.pointerId);
+      if (!pointers.delete(e.pointerId)) return; // pointerup is followed by lostpointercapture
       if (pointers.size < 2) pinch = null;
       if (pointers.size) return;
       drag = null;
-      this.moving = false;
-      if (!this.hazy) this.dirty = true; // draw the haze again
+      this.held = false;
     };
     c.addEventListener("pointerup", up);
     c.addEventListener("pointercancel", up);
-    c.addEventListener("pointerleave", () => (this.tip.hidden = true));
+    c.addEventListener("lostpointercapture", up); // whatever else ends the press
+    c.addEventListener("pointerleave", () => {
+      this.tip.hidden = true;
+      this.armed = false;
+    });
     c.addEventListener("dblclick", () => this.setView(this.viewName));
     c.addEventListener("wheel", (e) => {
       // a page scroll passing over the brain goes on; the wheel zooms with Ctrl / ⌘ (also a
-      // trackpad pinch) or once the brain has focus, after a click on it
-      if (!e.ctrlKey && !e.metaKey && document.activeElement !== c) return;
+      // trackpad pinch), or after a click on the brain until the pointer leaves it
+      if (!e.ctrlKey && !e.metaKey && !this.armed) return;
       e.preventDefault();
       this.zoom(Math.exp(-e.deltaY * 0.0015), local(e));
     }, { passive: false });
     c.addEventListener("keydown", (e) => {
       const turn = { ArrowLeft: [-0.15, 0], ArrowRight: [0.15, 0], ArrowUp: [0, -0.15], ArrowDown: [0, 0.15] }[e.key];
       if (turn) {
+        this.nudge();
         this.yaw += turn[0];
         this.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.pitch + turn[1]));
         this.dirty = true;

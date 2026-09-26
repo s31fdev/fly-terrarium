@@ -472,7 +472,8 @@ Design canvas. The page has:
   their targets). Neurons flash in the colour of
   their group: senses in the colour of their tool, the neurons we read as red rings, everything else
   warm yellow. Drag or use the arrow keys to turn; zoom with the buttons, a pinch, Ctrl + scroll, or
-  scroll after a click on the brain (so that a page scroll passing over it goes on); double-click to
+  scroll after a click on the brain while the pointer stays on it (so that a page scroll passing over
+  it goes on); double-click to
   go back; Front / Top / Side views. On a phone a vertical swipe scrolls the page and a sideways one
   turns the brain. Both connectomes are exported in the same frame
   (x to the fly's right, y ventral), and the direction of "forwards" is taken from the data (the

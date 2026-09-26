@@ -55,11 +55,11 @@ export async function loadConnectome(meta, open) {
   // for await: Safari cannot iterate a stream.
   const opened = meta.parts.map(open);
   opened.forEach((p) => p.catch(() => {})); // a failure is reported once, when its turn comes
-  let k = 0, part = null;
+  let next = 0, part = null; // the part being read
   const gzipped = new ReadableStream({
     async pull(controller) {
-      for (; k < opened.length; k++, part = null) {
-        part ??= (await opened[k]).getReader();
+      for (; next < opened.length; next++, part = null) {
+        part ??= (await opened[next]).getReader();
         const { done, value } = await part.read();
         if (!done) return controller.enqueue(value);
       }
@@ -77,7 +77,7 @@ export async function loadConnectome(meta, open) {
       const [target, stride, first, length] = planes[plane];
       const take = Math.min(length - at, chunk.length - i);
       if (stride === 1) target.set(chunk.subarray(i, i + take), at);
-      else for (let k = 0, p = first + stride * at; k < take; k++, p += stride) target[p] = chunk[i + k];
+      else for (let j = 0, p = first + stride * at; j < take; j++, p += stride) target[p] = chunk[i + j];
       i += take;
       at += take;
       if (at === length) (plane++), (at = 0);

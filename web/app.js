@@ -183,9 +183,9 @@ function behave(hz) {
 let meta, OUT, outOf, sideOf, shown; // shown: smoothed output rates (Hz) for the page
 let worker, ready = false, pending = false, wallRef = null, loads = 0;
 let spikesPerS = 0, lastInput = 0; // lastInput: brain time of the last sensory input
+let resetting = false; // the chunk on its way was computed before "Calm the brain"
 const view = new BrainView($("brain"), $("brain-overlay"));
-
-const FAILED = ". Pick the brain again to retry.";
+const NAMES = { 783: "female", mcns: "male" };
 
 async function loadBrain(version) {
   const load = ++loads;
@@ -199,7 +199,10 @@ async function loadBrain(version) {
   try {
     [m, xyz] = await Promise.all([get("meta.json").then((r) => r.json()), get("map.bin").then((r) => r.arrayBuffer())]);
   } catch (error) {
-    if (load === loads) setLoading(`the brain failed to load: ${error.message}${FAILED}`);
+    if (load !== loads) return;
+    // the old brain has stopped too: the buttons go back to it (the shuffle checkbox restarts it)
+    if (meta) setPressed("[data-brain]", (b) => b.dataset.brain === meta.version);
+    failed(version, error.message);
     return;
   }
   if (load !== loads) return; // another brain was picked meanwhile
@@ -211,7 +214,7 @@ async function loadBrain(version) {
   shown = Object.fromEntries(OUT.map((k) => [k, 0]));
   view.setBrain(meta, xyz);
   const count = meta.n.toLocaleString("en");
-  $("brain-sub").textContent = `${version === "mcns" ? "male" : "female"} · ${count} neurons`;
+  $("brain-sub").textContent = `${NAMES[version]} · ${count} neurons`;
   $("intro-count").textContent = count;
   setPressed("[data-view]", (b) => b.dataset.view === meta.start_view);
   buildChips();
@@ -222,11 +225,17 @@ async function loadBrain(version) {
 // The old brain stops: no worker, no readings left over from it
 function stopBrain() {
   worker?.terminate();
-  ready = pending = false;
+  ready = pending = resetting = false;
   spikesPerS = 0;
   rateHistory.fill(0);
   $("calm").hidden = true;
   setLoading("loading the brain…");
+}
+
+// A brain that did not load: which and why, and how to try again
+function failed(version, why) {
+  worker?.terminate(); // its other downloads stop too
+  setLoading(`the ${NAMES[version]} brain failed to load: ${why}. Pick it again to retry.`);
 }
 
 function startBrain() {
@@ -241,9 +250,9 @@ function startBrain() {
       speedMark = [performance.now(), simTime];
       setLoading(null);
     } else if (data.type === "spikes") onSpikes(data.spikes);
-    else if (data.type === "error") setLoading(`the brain failed to load: ${data.text}${FAILED}`);
+    else if (data.type === "error") failed(meta.version, data.text);
   };
-  worker.onerror = (e) => setLoading(`the brain failed to load: ${e.message || "brain.js did not start"}${FAILED}`);
+  worker.onerror = (e) => failed(meta.version, e.message || "brain.js did not start");
   worker.postMessage({ type: "load", base: new URL(`data/${meta.version}/`, location.href).href, meta, shuffled: $("shuffled").checked });
 }
 
@@ -269,7 +278,8 @@ function onSpikes(spikes) {
   };
   const k = 1 - Math.exp(-CHUNK / 0.15);
   for (const name of OUT) shown[name] += (now[name] - shown[name]) * k;
-  spikesPerS += (spikes.length / CHUNK - spikesPerS) * k;
+  if (resetting) resetting = false; // spikes from before the reset: not counted
+  else spikesPerS += (spikes.length / CHUNK - spikesPerS) * k;
   view.setActivity(input, shown);
   // No fatigue in this model: a brain kicked into a self-sustaining wave never calms down
   $("calm").hidden = !(spikesPerS > OVERLOAD_SPIKES || (simTime - lastInput > 1.5 && spikesPerS > CALM_SPIKES));
@@ -566,10 +576,10 @@ $("clear").addEventListener("click", () => {
 $("shuffled").addEventListener("change", () => meta && startBrain());
 $("calm").querySelector("button").addEventListener("click", () => {
   worker.postMessage({ type: "reset" });
-  // the rate is smoothed and the chunk on its way is from before the reset: without this
-  // the button would come right back
+  // the rate is smoothed, and the chunk on its way was run before the reset (the worker takes
+  // messages in order): counted, they would bring the button right back
   spikesPerS = 0;
-  lastInput = simTime;
+  resetting = pending;
   $("calm").hidden = true;
 });
 
