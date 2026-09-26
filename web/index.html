@@ -89,7 +89,8 @@
   #brain:active { cursor: grabbing; }
   .overlay { position: absolute; inset: 0; pointer-events: none; }
   .stats { position: absolute; left: 16px; top: 14px; font: 13px var(--mono); color: var(--soft); }
-  .hint { position: absolute; right: 16px; top: 14px; max-width: min(320px, 100% - 350px); text-align: right; font-size: 13px; color: var(--muted); } /* clear of the stats on the left */
+  .hint { position: absolute; right: 16px; top: 14px; margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+  .hint li { display: flex; align-items: center; gap: 8px; }
   .brain-label { position: absolute; left: 0; top: 0; display: flex; flex-direction: column; gap: 1px; padding: 7px 11px; border-radius: 10px; background: rgba(255,107,87,0.16); border: 1px solid rgba(255,107,87,0.6); white-space: nowrap; }
   .brain-label b { font-size: 14px; font-weight: 600; color: var(--action-ink); }
   .brain-label span { font: 12px var(--mono); color: #D9A79F; }
@@ -274,10 +275,14 @@
         </div>
       </div>
       <div class="brain-stage">
-        <canvas id="brain" tabindex="0" aria-label="3D map of the brain's neurons, lit when they spike. Drag: move. Right-drag or arrows: turn. Ctrl+scroll or pinch: zoom. Double-click: reset."></canvas>
+        <canvas id="brain" tabindex="0" aria-label="3D map of the brain's neurons, lit when they spike. Drag: move. Right-drag or arrows: rotate. Ctrl+scroll or pinch: zoom. Double-click: reset."></canvas>
         <div class="overlay" id="brain-overlay">
           <div class="stats" id="brain-stats"></div>
-          <div class="hint">drag: move · right-drag: turn · Ctrl+scroll: zoom</div>
+          <ul class="hint" aria-hidden="true">
+            <li><svg width="14" height="20" viewBox="0 0 14 20" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M7 1A6 6 0 0 0 1 7V8H7Z" fill="var(--fire)" stroke="none"/><rect x="1" y="1" width="12" height="18" rx="6"/><path d="M1 8H13M7 1V8"/></svg>move</li>
+            <li><svg width="14" height="20" viewBox="0 0 14 20" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M7 1A6 6 0 0 1 13 7V8H7Z" fill="var(--fire)" stroke="none"/><rect x="1" y="1" width="12" height="18" rx="6"/><path d="M1 8H13M7 1V8"/></svg>rotate</li>
+            <li><svg width="14" height="20" viewBox="0 0 14 20" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="5.9" y="2.8" width="2.2" height="4.4" rx="1.1" fill="var(--fire)" stroke="none"/><rect x="1" y="1" width="12" height="18" rx="6"/><path d="M1 8H13M7 1V2.8M7 7.2V8"/></svg>zoom</li>
+          </ul>
           <div class="tip" data-tip hidden></div>
           <div class="info" id="info" hidden><h3></h3><div class="cells"></div><p></p></div>
         </div>
