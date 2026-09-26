@@ -20,5 +20,13 @@ touch "$site/.nojekyll" # plain files, no Jekyll build
 git -C "$site" init -q -b gh-pages
 git -C "$site" add -A
 git -C "$site" -c user.name="$name" -c user.email="$email" commit -q -m "Fly terrarium: static site"
-git -C "$site" -c credential.helper= -c "credential.helper=!gh auth git-credential" \
-  push -f https://github.com/s31fdev/fly-terrarium.git gh-pages
+remote=https://github.com/s31fdev/fly-terrarium.git
+# a big buffer: the whole push is one request (else HTTP 408 on slow links)
+git -C "$site" -c http.postBuffer=200000000 -c credential.helper= -c "credential.helper=!gh auth git-credential" \
+  push -f "$remote" gh-pages
+# after a failed request git can still say "Everything up-to-date" and exit 0: check what is there
+if [ "$(git ls-remote "$remote" gh-pages | cut -f1)" != "$(git -C "$site" rev-parse HEAD)" ]; then
+  echo "publish failed: gh-pages on GitHub is not the new site" >&2
+  exit 1
+fi
+echo "published $(git -C "$site" rev-parse --short HEAD)"
